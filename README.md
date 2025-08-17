@@ -12,6 +12,7 @@ The MS-DOS v1.25 and v2.0 files [were originally shared at the Computer History 
 All files within this repo are released under the [MIT License]( https://en.wikipedia.org/wiki/MIT_License) as per the [LICENSE file](https://github.com/Microsoft/MS-DOS/blob/main/LICENSE) stored in the root of this repo.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 # This repo is not for historical reference
 
 The source files in the orignal repo are for historical reference and will be kept static, but Pull Requests suggesting any modifications to the source files in this repo may be reviewed by me and excepted, so feel free to fork this repo and experiment 😊.  
@@ -20,6 +21,12 @@ The source files in the orignal repo are for historical reference and will be ke
 
 The source files in this repo are for historical reference and will be kept static, so please **don’t send** Pull Requests suggesting any modifications to the source files, but feel free to fork this repo and experiment 😊.  
 >>>>>>> 2d5b4dc ( On branch master)
+=======
+# This repo is not for historical reference
+
+The source files in the orignal repo are for historical reference and will be kept static, but Pull Requests suggesting any modifications to the source files in this repo may be reviewed by me and excepted, so feel free to fork this repo and experiment 😊.  
+
+>>>>>>> 9a8f59f ( On branch master)
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).  For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
