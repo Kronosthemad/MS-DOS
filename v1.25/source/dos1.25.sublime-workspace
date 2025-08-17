@@ -1,0 +1,335 @@
+{
+	"auto_complete":
+	{
+		"selected_items":
+		[
+			[
+				"la",
+				"latest"
+			],
+			[
+				"p",
+				"positiony"
+			],
+			[
+				"W",
+				"Word"
+			],
+			[
+				"g",
+				"guesses"
+			],
+			[
+				"gu",
+				"guess"
+			],
+			[
+				"l",
+				"lower()"
+			],
+			[
+				"gue",
+				"guesses"
+			],
+			[
+				"Charging-",
+				"Charging---------"
+			],
+			[
+				"if",
+				"ifmain\tif __name__ == '__main__'"
+			],
+			[
+				"e",
+				"emp_2"
+			],
+			[
+				"in",
+				"input()"
+			],
+			[
+				"f",
+				"fullname"
+			],
+			[
+				"emp",
+				"emp_1"
+			],
+			[
+				"n",
+				"num2"
+			],
+			[
+				"B",
+				"button"
+			]
+		]
+	},
+	"buffers":
+	[
+	],
+	"build_system": "",
+	"build_system_choices":
+	[
+		[
+			[
+				[
+					"Packages/Python/Python.sublime-build",
+					""
+				],
+				[
+					"Packages/Python/Python.sublime-build",
+					"Syntax Check"
+				]
+			],
+			[
+				"Packages/Python/Python.sublime-build",
+				"Syntax Check"
+			]
+		]
+	],
+	"build_varint": "",
+	"command_palette":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+			[
+				"te",
+				"File Manager: Open Terminal"
+			],
+			[
+				"t",
+				"Terminus: List Shells"
+			],
+			[
+				"pac",
+				"Package Control: Install Package"
+			],
+			[
+				"n",
+				"npm: Install Package"
+			],
+			[
+				"p",
+				"Package Control: Install Package"
+			],
+			[
+				"o",
+				"OpenAI: Chat Select Mode"
+			],
+			[
+				"openai",
+				"OpenAI: Chat Select Mode"
+			],
+			[
+				"in",
+				"Package Control: Install Package"
+			],
+			[
+				"Snippet: ",
+				"Snippet: move_to"
+			]
+		],
+		"width": 0.0
+	},
+	"console":
+	{
+		"height": 185.0,
+		"history":
+		[
+			"build_window()",
+			"help()",
+			"python"
+		]
+	},
+	"distraction_free":
+	{
+		"menu_visible": true,
+		"show_minimap": false,
+		"show_open_files": false,
+		"show_tabs": false,
+		"side_bar_visible": false,
+		"status_bar_visible": false
+	},
+	"expanded_folders":
+	[
+		"/home/kronos/GitHub/MS-DOS-main/v1.25",
+		"/home/kronos/GitHub/MS-DOS-main/v1.25/source"
+	],
+	"file_history":
+	[
+		"/home/kronos/.bashrc",
+		"/home/kronos/GitHub/Game-master/window.py",
+		"/home/kronos/.config/opencode/opencode.json",
+		"/home/kronos/.tmux.conf",
+		"/home/kronos/_____/t",
+		"/home/kronos/kernelbuild/linux-6.16/.git/COMMIT_EDITMSG",
+		"/media/cdrom0/setup.ibt",
+		"/home/kronos/GitHub/MS-DOS-main/v1.25/source/MSDOS.ASM",
+		"/home/kronos/GitHub/Game-master/my-menu",
+		"/home/kronos/GitHub/Game-master/adventure.py",
+		"/home/kronos/GitHub/MS-DOS-main/v4.0/src/DEV/MAKEFILE",
+		"/home/kronos/GitHub/Game-master/.git/config",
+		"/home/kronos/GitHub/Game-master/.git/logs/refs/heads/master",
+		"/home/kronos/GitHub/Game-master/static.py",
+		"/home/kronos/GitHub/Game-master/Player.py",
+		"/home/kronos/GitHub/Game-master/magic.py",
+		"/home/kronos/GitHub/Game-master/.git/COMMIT_EDITMSG",
+		"/home/kronos/.config/sublime-text/Packages/User/move_to.sublime-snippet",
+		"/home/kronos/.config/sublime-text/Packages/User/find_place.sublime-snippet",
+		"/home/kronos/GitHub/Game/.git/COMMIT_EDITMSG",
+		"/home/kronos/Documents/python/interaction.py",
+		"/home/kronos/Documents/python/classes.py",
+		"/home/kronos/Documents/python/clock.py",
+		"/home/kronos/Documents/python/tui.py",
+		"/home/kronos/Documents/python/jkl.sh",
+		"/home/kronos/Documents/python/g.py",
+		"/home/kronos/Documents/python/input-shebang.py",
+		"/home/kronos/Documents/python/classes2.py",
+		"/home/kronos/.config/sublime-text/Packages/Python.sublime-package",
+		"/home/kronos/.config/sublime-text/Packages/User/if-loop.sublime-snippet",
+		"/home/kronos/.config/sublime-text/Packages/User/for-loop.sublime-snippet",
+		"/home/kronos/Documents/python/if-else.py",
+		"/home/kronos/Documents/python/t.py",
+		"/home/kronos/Documents/python/y.py",
+		"/home/kronos/Documents/t.py"
+	],
+	"find":
+	{
+		"height": 30.0
+	},
+	"find_in_files":
+	{
+		"height": 0.0,
+		"where_history":
+		[
+		]
+	},
+	"find_state":
+	{
+		"case_sensitive": false,
+		"find_history":
+		[
+		],
+		"highlight": true,
+		"in_selection": false,
+		"preserve_case": false,
+		"regex": false,
+		"replace_history":
+		[
+		],
+		"reverse": false,
+		"scrollbar_highlights": true,
+		"show_context": true,
+		"use_buffer2": true,
+		"use_gitignore": true,
+		"whole_word": false,
+		"wrap": true
+	},
+	"groups":
+	[
+		{
+			"sheets":
+			[
+			]
+		}
+	],
+	"incremental_find":
+	{
+		"height": 28.0
+	},
+	"input":
+	{
+		"height": 46.0
+	},
+	"layout":
+	{
+		"cells":
+		[
+			[
+				0,
+				0,
+				1,
+				1
+			]
+		],
+		"cols":
+		[
+			0.0,
+			1.0
+		],
+		"rows":
+		[
+			0.0,
+			1.0
+		]
+	},
+	"menu_visible": true,
+	"output.exec":
+	{
+		"height": 189.0,
+		"history":
+		[
+		]
+	},
+	"output.find_results":
+	{
+		"height": 0.0,
+		"history":
+		[
+		]
+	},
+	"pinned_build_system": "Packages/Python/Python.sublime-build",
+	"project": "dos1.25.sublime-project",
+	"replace":
+	{
+		"height": 56.0
+	},
+	"save_all_on_build": true,
+	"select_file":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+		],
+		"width": 0.0
+	},
+	"select_project":
+	{
+		"height": 625.0,
+		"last_filter": "asm",
+		"selected_items":
+		[
+			[
+				"asm",
+				"~/GitHub/Game-master/Game.sublime-project"
+			]
+		],
+		"width": 475.0
+	},
+	"select_symbol":
+	{
+		"height": 0.0,
+		"last_filter": "",
+		"selected_items":
+		[
+		],
+		"width": 0.0
+	},
+	"selected_group": 0,
+	"settings":
+	{
+	},
+	"show_minimap": true,
+	"show_open_files": false,
+	"show_tabs": true,
+	"side_bar_visible": true,
+	"side_bar_width": 274.0,
+	"status_bar_visible": true,
+	"template_settings":
+	{
+	}
+}
