@@ -10,7 +10,7 @@ MSVER	EQU	TRUE
 IBM	EQU	FALSE
 
 ; Set this switch to cause DOS to move itself to the end of memory
-HIGHMEM	EQU	FALSE
+HIGHMEM	EQU	TRUE
 
 ; Turn on switch below to allow testing disk code with DEBUG. It sets
 ; up a different stack for disk I/O (functions > 11) than that used for
