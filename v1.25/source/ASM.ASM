@@ -1,7 +1,7 @@
 ; Seattle Computer Products 8086 Assembler  version 2.44
 ;   by Tim Paterson
 ; Runs on the 8086 under MS-DOS
-
+.intel_syntax noprefix
 ;* * * * * * REVISION HISTORY * * * * * *
 ;
 ; 12/29/80  2.01  General release with 86-DOS version 0.34
