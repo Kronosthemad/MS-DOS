@@ -67,6 +67,131 @@
 	},
 	"buffers":
 	[
+		{
+			"file": "/home/kronos/GitHub/MS-DOS-main/v1.25/Tim_Paterson_16Dec2013_email.txt",
+			"settings":
+			{
+				"buffer_size": 1094,
+				"encoding": "Western (Windows 1252)",
+				"line_ending": "Unix"
+			},
+			"undo_stack":
+			[
+				[
+					3,
+					1,
+					"insert",
+					{
+						"characters": " "
+					},
+					"AQAAAEkEAAAAAAAASgQAAAAAAAAAAAAA",
+					"AQAAAAAAAAABAAAASQQAAAAAAABJBAAAAAAAAAAAAAAAAPC/"
+				],
+				[
+					4,
+					2,
+					"left_delete",
+					null,
+					"AgAAAEkEAAAAAAAASQQAAAAAAAABAAAAIEgEAAAAAAAASAQAAAAAAAABAAAAIA",
+					"AQAAAAAAAAABAAAASgQAAAAAAABKBAAAAAAAAAAAAAAAAPC/"
+				],
+				[
+					5,
+					2,
+					"left_delete",
+					null,
+					"AgAAAEcEAAAAAAAARwQAAAAAAAABAAAACkYEAAAAAAAARgQAAAAAAAABAAAAIA",
+					"AQAAAAAAAAABAAAASAQAAAAAAABIBAAAAAAAAAAAAAAAAPC/"
+				],
+				[
+					6,
+					1,
+					"left_delete",
+					null,
+					"AQAAAEUEAAAAAAAARQQAAAAAAAABAAAACg",
+					"AQAAAAAAAAABAAAARgQAAAAAAABGBAAAAAAAAAAAAAAAAPC/"
+				],
+				[
+					7,
+					1,
+					"revert",
+					null,
+					"AgAAAAAAAAAAAAAAAAAAAAAAAABIBAAARnJvbTogVGltIFBhdGVyc29uIApUbzogTGVuIFNodXN0ZWsgCkRhdGU6IE1vbiwgMTYgRGVjIDIwMTMgMTA6MzQ6MTcgLTA4MDAKU3ViamVjdDogUkU6IFNvdXJjZSBjb2RlIHRvIE1TLURPUyAxLjAKCgpJIGhhdmUgZm91bmQgYW5kIGF0dGFjaGVkIHRoZSBzb3VyY2UgY29kZSBmb3IgTVMtRE9TIDEuMjUgYXMgc2hpcHBlZCBieSBTZWF0dGxlIENvbXB1dGVyIFByb2R1Y3RzLiAgVmVyc2lvbiAxLjI1IHdhcyB0aGUgZmlyc3QgZ2VuZXJhbCByZWxlYXNlIHRvIE9FTSBjdXN0b21lcnMgb3RoZXIgdGhhbiBJQk0gc28gd2FzIHVzZWQgYnkgYWxsIHRoZSBmaXJzdCBjbG9uZSBtYW51ZmFjdHVyZXJzLgogCklCTSdzIERPUyAxLjEgY29ycmVzcG9uZHMgdG8gTVMtRE9TIDEuMjQuICBUaGVyZSBpcyBvbmUgbWlub3IgZGlmZmVyZW5jZSBiZXR3ZWVuIDEuMjQgYW5kIDEuMjUsIGFzIG5vdGVkIGluIHRoZSByZXZpc2lvbiBoaXN0b3J5IGF0IHRoZSB0b3Agb2YgTVNET1MuQVNNLgogCk9mIHRoZSBmaWxlIGF0dGFjaGVkLCBvbmx5IFNURERPUy5BU00vTVNET1MuQVNNIChET1MgbWFpbiBjb2RlKSBhbmQgQ09NTUFORC5BU00gKGNvbW1hbmQgcHJvY2Vzc29yKSB3b3VsZCBoYXZlIGJlZW4gdXNlZCBieSBhbiBPRU0gb3RoZXIgdGhhbiBTZWF0dGxlIENvbXB1dGVyLiAgVGhlIG90aGVyIGZpbGVzOgogCklPLkFTTSAtIEkvTyBzeXN0ZW0gdW5pcXVlIHRvIFNDUCAoZXF1aXZhbGVudCB0byBpYm1iaW8uc3lzKS4KQVNNLkFTTSAmIEhFWDJCSU4uQVNNIC0gT2xkIDgwODYgYXNzZW1ibGVyIGRldmVsb3BlZCBieSBTQ1AgKHVzZWQgdG8gYXNzZW1ibGUgb2xkZXIgdmVyc2lvbiBvZiBET1MpLgpUUkFOUy5BU00gLSBaODAgdG8gODA4NiBhc3NlbWJseSBzb3VyY2UgY29kZSB0cmFuc2xhdG9yIGRldmVsb3BlZCBieSBTQ1AuCiAKSSBhbHNvIGhhdmUgYSA24oCdIHN0YWNrIG9mIHByaW50b3V0cyBvZiBhc3NlbWJseSBsaXN0aW5ncyBmb3Igc29tZSBvZiB0aGVzZSBhbmQgcHJvYmFibHkgb3RoZXIgcmVsYXRlZCBwcm9ncmFtcy4KIApUaW0gUGF0ZXJzb24KUGF0ZXJzb24gVGVjaG5vbG9neQpodHRwOi8vd3d3LnBhdGVyc29udGVjaC5jb20vCgAAAAAAAAAARgQAAAAAAAAAAAAA",
+					"AQAAAAAAAAABAAAARQQAAAAAAABFBAAAAAAAAAAAAAAAAPC/"
+				]
+			]
+		},
+		{
+			"file": "STDDOS.ASM",
+			"settings":
+			{
+				"buffer_size": 626,
+				"encoding": "UTF-8",
+				"line_ending": "Unix"
+			},
+			"undo_stack":
+			[
+				[
+					3,
+					5,
+					"left_delete",
+					null,
+					"BQAAAH0BAAAAAAAAfQEAAAAAAAABAAAARXwBAAAAAAAAfAEAAAAAAAABAAAAU3sBAAAAAAAAewEAAAAAAAABAAAATHoBAAAAAAAAegEAAAAAAAABAAAAQXkBAAAAAAAAeQEAAAAAAAABAAAARg",
+					"AQAAAAAAAAABAAAAfgEAAAAAAAB+AQAAAAAAAAAAAAAAAPC/"
+				],
+				[
+					4,
+					1,
+					"insert",
+					{
+						"characters": "TRUE"
+					},
+					"BAAAAHkBAAAAAAAAegEAAAAAAAAAAAAAegEAAAAAAAB7AQAAAAAAAAAAAAB7AQAAAAAAAHwBAAAAAAAAAAAAAHwBAAAAAAAAfQEAAAAAAAAAAAAA",
+					"AQAAAAAAAAABAAAAeQEAAAAAAAB5AQAAAAAAAAAAAAAAAPC/"
+				]
+			]
+		},
+		{
+			"file": "MSDOS.ASM",
+			"settings":
+			{
+				"buffer_size": 110223,
+				"line_ending": "Unix"
+			},
+			"undo_stack":
+			[
+			]
+		},
+		{
+			"file": "COMMAND.ASM",
+			"settings":
+			{
+				"buffer_size": 64899,
+				"encoding": "UTF-8",
+				"line_ending": "Unix"
+			},
+			"undo_stack":
+			[
+				[
+					3,
+					1,
+					"insert",
+					{
+						"characters": " "
+					},
+					"AQAAABgAAAAAAAAAGQAAAAAAAAAAAAAA",
+					"AQAAAAAAAAABAAAAGAAAAAAAAAAYAAAAAAAAAAAAAAAAAPC/"
+				],
+				[
+					4,
+					1,
+					"left_delete",
+					null,
+					"AQAAABgAAAAAAAAAGAAAAAAAAAABAAAAIA",
+					"AQAAAAAAAAABAAAAGQAAAAAAAAAZAAAAAAAAAAAAAAAAAPC/"
+				]
+			]
+		}
 	],
 	"build_system": "",
 	"build_system_choices":
@@ -160,6 +285,7 @@
 	],
 	"file_history":
 	[
+		"/home/kronos/GitHub/MS-DOS-main/v1.25/source/IO.ASM",
 		"/home/kronos/.bashrc",
 		"/home/kronos/GitHub/Game-master/window.py",
 		"/home/kronos/.config/opencode/opencode.json",
@@ -198,7 +324,7 @@
 	],
 	"find":
 	{
-		"height": 30.0
+		"height": 50.0
 	},
 	"find_in_files":
 	{
@@ -212,6 +338,7 @@
 		"case_sensitive": false,
 		"find_history":
 		[
+			"include"
 		],
 		"highlight": true,
 		"in_selection": false,
@@ -233,6 +360,129 @@
 		{
 			"sheets":
 			[
+				{
+					"buffer": 0,
+					"file": "/home/kronos/GitHub/MS-DOS-main/v1.25/Tim_Paterson_16Dec2013_email.txt",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 1094,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								1093,
+								1093
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Text/Plain text.tmLanguage"
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 1,
+					"stack_multiselect": false,
+					"type": "text"
+				},
+				{
+					"buffer": 1,
+					"file": "STDDOS.ASM",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 626,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								381,
+								381
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Text/Plain text.tmLanguage",
+							"tab_size": 4,
+							"translate_tabs_to_spaces": false
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 2,
+					"stack_multiselect": false,
+					"type": "text"
+				},
+				{
+					"buffer": 2,
+					"file": "MSDOS.ASM",
+					"selected": true,
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 110223,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								2288,
+								2295
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Text/Plain text.tmLanguage",
+							"tab_size": 8,
+							"translate_tabs_to_spaces": true
+						},
+						"translation.x": 0.0,
+						"translation.y": 68222.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 0,
+					"stack_multiselect": false,
+					"type": "text"
+				},
+				{
+					"buffer": 3,
+					"file": "COMMAND.ASM",
+					"semi_transient": false,
+					"settings":
+					{
+						"buffer_size": 64899,
+						"regions":
+						{
+						},
+						"selection":
+						[
+							[
+								128,
+								135
+							]
+						],
+						"settings":
+						{
+							"syntax": "Packages/Text/Plain text.tmLanguage",
+							"tab_size": 8,
+							"translate_tabs_to_spaces": true
+						},
+						"translation.x": 0.0,
+						"translation.y": 0.0,
+						"zoom_level": 1.0
+					},
+					"stack_index": 3,
+					"stack_multiselect": false,
+					"type": "text"
+				}
 			]
 		}
 	],
