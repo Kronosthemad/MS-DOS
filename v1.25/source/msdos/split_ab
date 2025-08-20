@@ -1,0 +1,487 @@
+
+
+devname:
+        mov     si,offset dosgroup:ioname       ;list of i/o devices with file names
+        mov     bh,numdev               ;bh = number of device names
+lookio:
+        mov     di,offset dosgroup:name1
+        mov     cx,4                    ;all devices are 4 letters
+        repe    cmpsb                   ;check for name in list
+        jz      iochk                   ;if first 3 letters ok, check for the rest
+        add     si,cx                   ;point to next device name
+        dec     bh
+        jnz     lookio
+cret:
+        stc                             ;not found
+        ret
+
+iochk:
+        if      ibm
+        cmp     bh,numdev       ;is it the first device?
+        jnz     notcom1
+        mov     bh,2            ;make it the same as aux
+notcom1:
+        endif
+        neg     bh
+        mov     cx,2            ;check rest of name but not extension
+        mov     ax,2020h
+        repe    scasw           ;make sure rest of name is blanks
+        jnz     cret
+ret1:   ret                     ;zero set so create works
+
+getfile:
+; same as getname except es:di points to fcb on successful return
+        call    movname
+        jc      ret1
+        push    dx
+        push    ds
+        call    findname
+        pop     es
+        pop     di
+ret2:   ret
+
+
+getname:
+
+; inputs:
+;       ds,dx point to fcb
+; function:
+;       find file name in disk directory. first byte is
+;       drive number (0=current disk). "?" matches any
+;       character.
+; outputs:
+;       carry set if file not found
+;       else
+;       zero set if attributes match (always except when creating)
+;       bp = base of drive parameters
+;       ds = cs
+;       es = cs
+;       bx = pointer into directory buffer
+;       si = pointer to first cluster field in directory entry
+;       [dirbuf] has directory record with match
+;       [name1] has file name
+; all other registers destroyed.
+
+        call    movname
+        jc      ret2            ;bad file name?
+findname:
+        mov     ax,cs
+        mov     ds,ax
+        call    devname
+        jnc     ret2
+        call    startsrch
+contsrch:
+        call    getentry
+        jc      ret2
+srch:
+        mov     ah,byte ptr [bx]
+        or      ah,ah                   ;end of directory?
+        jz      free
+        cmp     ah,[delall]             ;free entry?
+        jz      free
+        mov     si,bx
+        mov     di,offset dosgroup:name1
+        mov     cx,11
+wildcrd:
+        repe    cmpsb
+        jz      found
+        cmp     byte ptr [di-1],"?"
+        jz      wildcrd
+nextent:
+        call    nextentry
+        jnc     srch
+ret3:   ret
+
+free:
+        cmp     [entfree],-1            ;found a free entry before?
+        jnz     tstall                  ;if so, ignore this one
+        mov     cx,[lastent]
+        mov     [entfree],cx
+tstall:
+        cmp     ah,[delall]             ;at end of directory?
+        jz      nextent                 ;no - continue search
+        stc                             ;report not found
+        ret
+ 
+found:
+;check if attributes allow finding it
+        mov     ah,[attrib]             ;attributes of search
+        not     ah
+        and     ah,[si]                 ;compare with attributes of file
+        add     si,15   
+        and     ah,6                    ;only look at bits 1 and 2
+        jz      ret3
+        test    byte ptr [creating],-1  ;pass back mismatch if creating
+        jz      nextent                 ;otherwise continue searching
+        ret
+
+
+getentry:
+
+; inputs:
+;       [lastent] has previously searched directory entry
+; function:
+;       locates next sequential directory entry in preparation for search
+; outputs:
+;       carry set if none
+;       else
+;       al = current directory block
+;       bx = pointer to next directory entry in [dirbuf]
+;       dx = pointer to first byte after end of dirbuf
+;       [lastent] = new directory entry number
+
+        mov     ax,[lastent]
+        inc     ax                      ;start with next entry
+        cmp     ax,[bp.maxent]
+        jae     none
+getent:
+        mov     [lastent],ax
+        mov     cl,4
+        shl     ax,cl
+        xor     dx,dx
+        shl     ax,1
+        rcl     dx,1                    ;account for overflow in last shift
+        mov     bx,[bp.secsiz]
+        and     bl,255-31               ;must be multiple of 32
+        div     bx
+        mov     bx,dx                   ;position within sector
+        mov     ah,[bp.devnum]          ;al=directory sector no.
+        cmp     ax,[dirbufid]
+        jz      havdirbuf
+        push    bx
+        call    dirread
+        pop     bx
+havdirbuf:
+        mov     dx,offset dosgroup:dirbuf
+        add     bx,dx
+        add     dx,[bp.secsiz]
+        ret
+
+nextentry:
+
+; inputs:
+;       same as outputs of getentry, above
+; function:
+;       update al, bx, and [lastent] for next directory entry.
+;       carry set if no more.
+
+        mov     di,[lastent]
+        inc     di
+        cmp     di,[bp.maxent]
+        jae     none
+        mov     [lastent],di
+        add     bx,32
+        cmp     bx,dx
+        jb      havit
+        inc     al                      ;next directory sector
+        push    dx                      ;save limit
+        call    dirread
+        pop     dx
+        mov     bx,offset dosgroup:dirbuf
+havit:
+        clc
+        ret
+
+none:
+        call    chkdirwrite
+        stc
+ret4:   ret
+
+
+delete: ; system call 19
+        call    movname
+        mov     al,-1
+        jc      ret4
+        mov     al,cs:[attrib]
+        and     al,6                    ;look only at hidden bits
+        cmp     al,6                    ;both must be set
+        jnz     notall
+        mov     cx,11
+        mov     al,"?"
+        mov     di,offset dosgroup:name1
+        repe    scasb                   ;see if name is *.*
+        jnz     notall
+        mov     byte ptr cs:[delall],0  ;del *.* - flag deleting all
+notall:
+        call    findname
+        mov     al,-1
+        jc      ret4
+        or      bh,bh           ;check if device name
+        js      ret4            ;can't delete i/o devices
+delfile:
+        mov     byte ptr [dirtydir],-1
+        mov     ah,[delall]
+        mov     byte ptr [bx],ah
+        mov     bx,[si]
+        mov     si,[bp.fat]
+        or      bx,bx
+        jz      delnxt
+        cmp     bx,[bp.maxclus]
+        ja      delnxt
+        call    release
+delnxt:
+        call    contsrch
+        jnc     delfile
+        call    fatwrt
+        call    chkdirwrite
+        xor     al,al
+        ret
+
+
+rename: ;system call 23
+        call    movname
+        jc      erret
+        add     si,5
+        mov     di,offset dosgroup:name2
+        call    lodname
+        jc      erret           ;report error if second name invalid
+        call    findname
+        jc      erret
+        or      bh,bh           ;check if i/o device name
+        js      erret           ;if so, can't rename it
+        mov     si,offset dosgroup:name1
+        mov     di,offset dosgroup:name3
+        mov     cx,6            ;6 words (12 bytes)--include attribute byte
+        rep     movsw           ;copy name to search for
+renfil:
+        mov     di,offset dosgroup:name1
+        mov     si,offset dosgroup:name2
+        mov     cx,11
+newnam:
+        lodsb
+        cmp     al,"?"
+        jnz     nochg
+        mov     al,[bx]
+nochg:
+        stosb
+        inc     bx
+        loop    newnam
+        mov     byte ptr [di],6 ;stop duplicates with any attributes
+        call    devname         ;check if giving it a device name
+        jnc     renerr
+        push    [lastent]       ;save position of match
+        mov     [lastent],-1    ;search entire directory for duplicate
+        call    contsrch        ;see if new name already exists
+        pop     ax
+        jnc     renerr                  ;error if found
+        call    getent                  ;re-read matching entry
+        mov     di,bx
+        mov     si,offset dosgroup:name1
+        mov     cx,5
+        movsb
+        rep     movsw                   ;replace old name with new one
+        mov     byte ptr [dirtydir],-1  ;flag change in directory
+        mov     si,offset dosgroup:name3
+        mov     di,offset dosgroup:name1
+        mov     cx,6                    ;include attribute byte
+        rep     movsw                   ;copy name back into search buffer
+        call    contsrch
+        jnc     renfil
+        call    chkdirwrite
+        xor     al,al
+        ret
+
+renerr:
+        call    chkdirwrite
+erret:
+        mov     al,-1
+ret5:   ret
+
+
+movname:
+
+; inputs:
+;       ds, dx point to fcb or extended fcb
+; outputs:
+;       ds:dx point to normal fcb
+;       es = cs
+;       if file name ok:
+;       bp has base of driver parameters
+;       [name1] has name in upper case
+; all registers except dx destroyed
+; carry set if bad file name or drive
+
+        mov     cs:word ptr [creating],0e500h   ;not creating, not del *.*
+        mov     ax,cs
+        mov     es,ax
+        mov     di,offset dosgroup:name1
+        mov     si,dx
+        lodsb
+        mov     cs:[extfcb],al  ;set flag if extended fcb in use
+        mov     ah,0            ;set default attributes
+        cmp     al,-1           ;is it an extended fcb?
+        jnz     havattrb
+        add     dx,7            ;adjust to point to normal fcb
+        add     si,6            ;point to drive select byte
+        mov     ah,[si-1]       ;get attribute byte
+        lodsb           ;get drive select byte
+havattrb:
+        mov     cs:[attrib],ah  ;save attributes
+        call    getthisdrv
+lodname:
+; this entry point copies a file name from ds,si
+; to es,di converting to upper case.
+        cmp     byte ptr [si]," "       ;don't allow blank as first letter
+        stc                     ;in case of error
+        jz      ret5
+        mov     cx,11
+movchk:
+        call    getlet
+        jb      ret5
+        jnz     stolet          ;is it a delimiter?
+        cmp     al," "          ;this is the only delimiter allowed
+        stc                     ;in case of error
+        jnz     ret5
+stolet:
+        stosb
+        loop    movchk
+        clc                     ;got through whole name - no error
+ret6:   ret
+
+getthisdrv:
+        cmp     cs:[numdrv],al
+        jc      ret6
+        dec     al
+        jns     phydrv
+        mov     al,cs:[curdrv]
+phydrv:
+        mov     cs:[thisdrv],al
+        ret
+        
+
+open:   ;system call 15
+        call    getfile
+doopen:
+; enter here to perform open on file already found
+; in directory. ds=cs, bx points to directory
+; entry in dirbuf, si points to first cluster field, and
+; es:di point to the fcb to be opened. this entry point
+; is used by create.
+        jc      erret
+        or      bh,bh           ;check if file is i/o device
+        js      opendev         ;special handler if so
+        mov     al,[thisdrv]
+        inc     ax
+        stosb
+        xor     ax,ax
+        if      zeroext
+        add     di,11
+        stosw                   ;zero low byte of extent field if ibm only
+        endif
+        if      not zeroext
+        add     di,12           ;point to high half of current block field
+        stosb                   ;set it to zero (cp/m programs set low byte)
+        endif
+        mov     al,128          ;default record size
+        stosw                   ;set record size
+        lodsw                   ;get starting cluster
+        mov     dx,ax           ;save it for the moment
+        movsw                   ;transfer size to fcb
+        movsw
+        mov     ax,[si-8]       ;get date
+        stosw                   ;save date in fcb
+        mov     ax,[si-10]      ;get time
+        stosw                   ;save it in fcb
+        mov     al,[bp.devnum]
+        or      al,40h
+        stosb
+        mov     ax,dx           ;restore starting cluster
+        stosw                   ; first cluster
+        stosw                   ; last cluster accessed
+        xor     ax,ax
+        stosw                   ; position of last cluster
+        ret
+
+
+opendev:
+        add     di,13           ;point to 2nd half of extent field
+        xor     ax,ax
+        stosb                   ;set it to zero
+        mov     al,128
+        stosw                   ;set record size to 128
+        xor     ax,ax
+        stosw
+        stosw                   ;set current size to zero
+        call    date16
+        stosw                   ;date is todays
+        xchg    ax,dx
+        stosw                   ;use current time
+        mov     al,bh           ;get device number
+        stosb
+        xor     al,al           ;no error
+        ret
+faterr:
+        xchg    ax,di           ;put error code in di
+        mov     ah,2            ;while trying to read fat
+        mov     al,[thisdrv]    ;tell which drive
+        call    fatal1
+        jmp     short fatread
+startsrch:
+        mov     ax,-1
+        mov     [lastent],ax
+        mov     [entfree],ax
+fatread:
+
+; inputs:
+;       ds = cs
+; function:
+;       if disk may have been changed, fat is read in and buffers are
+;       flagged invalid. if not, no action is taken.
+; outputs:
+;       bp = base of drive parameters
+;       carry set if invalid drive returned by mapdev
+; all other registers destroyed
+
+        mov     al,[thisdrv]
+        xor     ah,ah           ;set default response to zero & clear carry
+        call    far ptr biosdskchg      ;see what bios has to say
+        jc      faterr
+        call    getbp
+        mov     al,[thisdrv]    ;use physical unit number
+        mov     si,[bp.fat]
+        or      ah,[si-1]       ;dirty byte for fat
+        js      newdsk          ;if either say new disk, then it's so
+        jnz     mapdrv
+        mov     ah,1
+        cmp     ax,word ptr [bufdrvno]  ;does buffer have dirty sector of this drive?
+        jz      mapdrv
+newdsk:
+        cmp     al,[bufdrvno]   ;see if buffer is for this drive
+        jnz     bufok           ;if not, don't touch it
+        mov     [bufsecno],0    ;flag buffers invalid
+        mov     word ptr [bufdrvno],00ffh
+bufok:
+        mov     [dirbufid],-1
+        call    figfat
+nextfat:
+        push    ax
+        call    dskread
+        pop     ax
+        jc      badfat
+        sub     al,[bp.fatcnt]
+        jz      newfat
+        call    fatwrt
+newfat:
+        mov     si,[bp.fat]
+        mov     al,[bp.devnum]
+        mov     ah,[si]         ;get first byte of fat
+        or      ah,0f8h         ;put in range
+        call    far ptr biosmapdev
+        mov     ah,0
+        mov     [si-2],ax       ;set device no. and reset dirty bit
+mapdrv:
+        mov     al,[si-2]       ;get device number
+getbp:
+        mov     bp,[drvtab]     ;just in case drive isn't valid
+        and     al,3fh          ;mask out dirty bit
+        cmp     al,[numio]
+        cmc
+        jc      ret7
+        push    ax
+        mov     ah,dpbsiz
+        mul     ah
+        add     bp,ax
+        pop     ax
+ret7:   ret
+
+

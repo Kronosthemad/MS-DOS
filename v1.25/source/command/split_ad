@@ -1,0 +1,500 @@
+        mov     [plus],1                ;keep track of "+" signs
+        inc     si                      ;skip over it
+parsnam:
+        mov     ax,2901h
+        int     33                      ;parse file name
+        cmp     al,-1                   ;illegal?
+        mov     dx,offset trangroup:baddrv
+        jz      coperrj
+        xchg    ax,dx                   ;save parse flag in dl
+        mov     al,byte ptr[di]         ;get drive number
+        or      al,al                   ;is it default?
+        jnz     parsw
+        mov     al,[curdrv]             ;substitute actual drive
+        inc     ax
+        mov     byte ptr[di],al
+parsw:
+        push    bx
+        push    di
+        call    switch                  ;process switches
+        or      bp,ax                   ;combine all switches
+        call    setasc                  ;check for /a or /b
+        pop     di
+        pop     bx
+        cmp     byte ptr[di+1]," "              ;did we even get a file name?
+        ret
+
+retzf:
+        xor     ax,ax
+ret35:  ret
+
+searchnext:
+        mov     al,[parm1]              ;is name ambiguous?
+        dec     al
+        jnz     ret35                   ;don't perform search if not
+        mov     ah,srchnxt
+search:
+        push    ax
+        mov     ah,setdma
+        mov     dx,offset trangroup:dirbuf
+        int     33                      ;put result of search in dirbuf
+        pop     ax                      ;restore search first/next command
+        mov     dx,fcb
+        int     33                      ;do the search
+        or      al,al
+        ret
+
+setasc:
+;given switch vector in ax, 
+;       set ascii switch if /a is set
+;       clear ascii switch if /b is set
+;       leave ascii unchanged if neither or both are set
+; also sets inexact if ascii is ever set. al = ascii on exit, flags set
+        and     al,aswitch+bswitch
+        jpe     loadsw                  ;pe means both or neither are set
+        and     al,aswitch
+        mov     [ascii],al
+        or      [inexact],al
+loadsw:
+        mov     al,[ascii]
+        or      al,al
+        ret
+
+buildname:
+; [si] = ambiguous input file name
+; [bx] = source of replacement characters
+; [di] = destination
+; file name is copied from [si] to [di]. if "?"s are encountered,
+; they are replaced with the character in the same position at [bx].
+        mov     cx,11
+buildnam:
+        lodsb
+        cmp     al,"?"
+        jnz     notambig
+        mov     al,byte ptr[bx]
+notambig:
+        stosb
+        inc     bx
+        loop    buildnam
+        ret
+
+compname:
+        mov     si,offset trangroup:dest
+        mov     di,offset trangroup:dirbuf
+        mov     cx,6
+        repe    cmpsw
+        ret
+
+checkread:
+;read file in (with readin) if not identical to destination
+        call    compname                ;see if source and destination the same
+        jnz     readin
+        cmp     [append],0              ;if physical append, it's ok
+        jnz     ret40
+        mov     dx,offset trangroup:losterr             ;tell him he's not going to get it
+        mov     ah,printbuf
+        int     33
+ret40:  ret
+
+readin:
+;open source file and read it in. if memory fills up, flush it out to
+;destination and keep reading. if /a switch set, chop file at first ^z.
+; inputs/outputs:
+;       [nxtadd] has current pointer in buffer
+;       [cflag] <>0 if destination has been created
+
+        mov     dx,offset trangroup:dirbuf
+        mov     ah,open
+        int     21h
+        or      al,al                   ;successful open?
+        jnz     ret40                   ;if not, just ignore it
+        xor     ax,ax
+        mov     word ptr[dirbuf+rr],ax
+        mov     word ptr[dirbuf+rr+2],ax
+        inc     ax
+        mov     word ptr[dirbuf+reclen],ax
+copylp:
+        mov     dx,[nxtadd]
+        mov     ah,setdma
+        push    ds
+        mov     ds,[tpa]
+        int     33
+        pop     ds
+        mov     cx,[bytcnt]
+        sub     cx,dx                   ;compute available space
+        mov     dx,offset trangroup:dirbuf
+        mov     ah,rdblk                ;read in source file
+        int     21h
+        jcxz    ret40
+        cmp     [ascii],0
+        jz      binread
+        mov     dx,cx
+        mov     di,[nxtadd]
+        mov     al,1ah
+        push    es
+        mov     es,[tpa]
+        repne   scasb                   ;scan for eof
+        pop     es
+        jnz     useall
+        inc     cx
+useall:
+        sub     dx,cx
+        mov     cx,dx
+binread:
+        add     cx,[nxtadd]
+        mov     [nxtadd],cx
+        cmp     cx,[bytcnt]             ;is buffer full?
+        jb      ret40                   ;if not, we must have found eof
+        call    flshfil
+        jmp     short copylp
+
+closefil:
+        mov     ax,[nxtadd]
+        mov     bx,ax
+        or      al,ah                   ;see if any data is loaded
+        or      al,[cflag]              ;   or file was created
+        jz      ret50                   ;don't close or count if not created
+        mov     al,byte ptr[arg2s]
+        call    setasc                  ;check for /b or /a on destination
+        jz      binclos
+        cmp     bx,[bytcnt]             ;is memory full?
+        jnz     putz
+        call    flshfil                 ;empty it to make room for 1 lousy byte
+        xor     bx,bx
+putz:
+        push    ds
+        mov     ds,[tpa]
+        mov     word ptr[bx],1ah                ;add end-of-file mark (ctrl-z)
+        pop     ds
+        inc     [nxtadd]
+binclos:
+        call    flshfil
+        cmp     [inexact],0             ;copy not exact?
+        jnz     nodate                  ;if so, don't copy date & time
+        mov     si,offset trangroup:dirbuf+offdate
+        mov     di,offset trangroup:dest+offdate        ;make date & time same as original
+        movsw                           ;copy date
+        movsw                           ;copy time
+nodate:
+        mov     dx,offset trangroup:dest
+        mov     ah,close
+        int     21h
+        inc     [filecnt]
+ret50:  ret
+
+flshfil:
+;write out any data remaining in memory.
+; inputs:
+;       [nxtadd] = no. of bytes to write
+;       [cflag] <>0 if file has been created
+; outputs:
+;       [nxtadd] = 0
+
+        mov     al,1
+        xchg    [cflag],al
+        or      al,al
+        jnz     exists
+        cmp     [nowrite],0
+        jnz     skpmak                  ;don't actually create if nowrite set
+        mov     dx,offset trangroup:dest
+        mov     ah,make
+        int     21h
+        mov     dx,offset trangroup:fuldir
+        or      al,al
+        jnz     coperr
+skpmak:
+        xor     ax,ax
+        mov     word ptr[dest+rr],ax
+        mov     word ptr[dest+rr+2],ax
+        inc     ax
+        mov     word ptr[dest+reclen],ax
+exists:
+        xor     cx,cx
+        xchg    cx,[nxtadd]
+        cmp     [nowrite],0             ;if nowrite set, just seek cx bytes
+        jnz     seekend
+        xor     dx,dx
+        push    ds
+        mov     ds,[tpa]
+        mov     ah,setdma
+        int     33
+        pop     ds
+        mov     dx,offset trangroup:dest
+        mov     ah,wrblk
+        int     21h
+        or      al,al
+        jz      ret60
+        mov     dx,offset trangroup:dest
+        mov     ah,close
+        int     21h
+        mov     ah,delete
+        int     33
+        mov     dx,offset trangroup:nospace
+coperr:
+        mov     ah,9
+        int     21h
+        jmp     endcopy
+
+seekend:
+        add     word ptr[dest+rr],cx
+        adc     word ptr[dest+rr+2],0           ;propagate carry
+ret60:  ret
+
+getbatbyt:
+;get one byte from the batch file and return it in al. end-of-file
+;returns <cr> and ends batch mode. ds must be set to resident segment.
+;ah, cx, dx destroyed.
+assume  ds:resgroup
+        mov     dx,offset resgroup:batfcb
+        mov     ah,rdblk
+        mov     cx,1
+        int     33              ;get one more byte from batch file
+        jcxz    bateof
+        mov     al,[batbyt]
+        cmp     al,1ah
+        jnz     ret70
+bateof:
+        mov     al,0dh          ;if end-of-file, then end of line
+        mov     [batch],0       ;and turn off batch mode
+ret70:  ret
+assume  ds:trangroup
+
+scanoff:
+        lodsb
+        call    delim
+        jz      scanoff
+        dec     si              ;point to first non-delimiter
+        ret
+
+delim:
+        cmp     al," "
+        jz      ret80
+        cmp     al,"="
+        jz      ret80
+        cmp     al,","
+        jz      ret80
+        cmp     al,9            ;check for tab character
+ret80:  ret
+
+pause:
+        mov     dx,offset trangroup:pausmes
+        mov     ah,printbuf
+        int     33
+        mov     ax,0c00h+inchar ;get character with kb buffer flush
+        int     33
+ret90:  ret
+
+;date and time are set during initialization and use
+;this routines since they need to do a long return
+
+datinit:
+        push    es
+        push    ds              ;going to use the previous stack
+        mov     ax,cs           ;set up the appropriate segment registers
+        mov     es,ax
+        mov     ds,ax
+        mov     word ptr ds:[81h],13    ;want to prompt for date during initialization
+        call    date
+        call    time
+        pop     ds
+        pop     es
+yyy     proc    far
+        ret
+yyy     endp
+
+; date - gets and sets the time
+
+date:
+        mov     si,81h          ;accepting argument for date inline
+        call    scanoff
+        cmp     al,13
+        jz      prmtdat
+        mov     bx,2f00h+"-"    ;"/-"
+        call    inline
+        jmp     comdat
+
+prmtdat:
+        mov     dx,offset trangroup:curdat
+        mov     ah,printbuf
+        int     33              ;print "current date is "
+        mov     ah,getdate
+        int     33              ;get date in cx:dx
+        cbw
+        mov     si,ax
+        shl     si,1
+        add     si,ax           ;si=ax*3
+        add     si,offset trangroup:weektab
+        mov     bx,cx
+        mov     cx,3
+        call    outcnt
+        mov     al," "
+        call    out
+        mov     ax,bx
+        mov     cx,dx
+        mov     dl,100
+        div     dl
+        xchg    al,ah
+        xchg    ax,dx
+        mov     bl,"-"
+        call    show
+getdat:
+        mov     dx,offset trangroup:newdat
+        mov     bx,2f00h+"-"    ;"/-" in bx
+        call    getbuf
+comdat: jz      ret90
+        jc      daterr
+        lodsb   
+        cmp     al,bl
+        jz      sepgd
+        cmp     al,bh
+        jnz     daterr
+sepgd:  call    getnum
+        jc      daterr
+        mov     cx,1900
+        cmp     byte ptr[si],13
+        jz      bias
+        mov     al,100
+        mul     ah
+        mov     cx,ax
+        call    getnum
+        jc      daterr
+bias:
+        mov     al,ah
+        mov     ah,0
+        add     cx,ax
+        lodsb
+        cmp     al,13
+        jnz     daterr
+        mov     ah,setdate
+        int     33
+        or      al,al
+        jnz     daterr
+        jmp     ret90
+daterr:
+        mov     dx,offset trangroup:baddat
+        mov     ah,printbuf
+        int     33
+        jmp     getdat
+
+; time gets and sets the time
+
+time:
+        mov     si,81h                  ;accepting argument for time inline
+        call    scanoff
+        cmp     al,13
+        jz      prmttim
+        mov     bx,3a00h+":"
+        call    inline
+        jmp     comtim
+
+prmttim:
+        mov     dx,offset trangroup:curtim
+        mov     ah,printbuf
+        int     33              ;print "current time is "
+        mov     ah,gettime
+        int     33              ;get time in cx:dx
+        mov     bl,":"
+        call    show
+gettim:
+        xor     cx,cx           ;initialize hours and minutes to zero
+        mov     dx,offset trangroup:newtim
+        mov     bx,3a00h+":"
+        call    getbuf
+comtim: jz      ret100          ;if no time present, don't change it
+        jc      timerr
+        mov     cx,dx
+        xor     dx,dx
+        lodsb
+        cmp     al,13
+        jz      savtim
+        cmp     al,bl
+        jnz     timerr
+        mov     bl,"."
+        call    getnum
+        jc      timerr
+        mov     dh,ah           ;position seconds
+        lodsb
+        cmp     al,13
+        jz      savtim
+        cmp     al,bl
+        jnz     timerr  
+        call    getnum
+        jc      timerr
+        mov     dl,ah
+        lodsb
+        cmp     al,13
+        jnz     timerr
+savtim:
+        mov     ah,settime
+        int     33
+        or      al,al
+        jz      ret100          ;error in time?
+timerr:
+        mov     dx,offset trangroup:badtim
+        mov     ah,printbuf
+        int     33              ;print error message
+        jmp     gettim          ;try again
+
+getbuf:
+        mov     ah,printbuf
+        int     33              ;print "enter new date: "
+        mov     ah,inbuf
+        mov     dx,offset trangroup:combuf
+        int     33              ;get input line
+        call    crlf2
+        mov     si,offset trangroup:combuf+2
+        cmp     byte ptr[si],13 ;check if new date entered
+        jz      ret100
+inline:
+        call    getnum          ;get one or two digit number
+        jc      ret100
+        mov     dh,ah           ;put in position
+        lodsb
+        cmp     al,bl
+        jz      next
+        cmp     bl,":"          ;is it a date seperator?
+        jnz     datesep
+        dec     si
+        mov     dl,0
+ret100: ret                     ;time may have only an hour specified
+datesep:
+        cmp     al,bh
+        stc
+        jnz     ret100
+next:   call    getnum
+        mov     dl,ah           ;put in position
+        ret
+
+getnum:
+        call    indig
+        jc      ret100
+        mov     ah,al           ;save first digit
+        call    indig           ;another digit?
+        jc      okret
+        aad                     ;convert unpacked bcd to decimal
+        mov     ah,al
+okret:
+        or      al,1
+ret110: ret
+
+indig:
+        mov     al,byte ptr[si]
+        sub     al,"0"
+        jc      ret110
+        cmp     al,10
+        cmc
+        jc      ret110
+        inc     si
+        ret
+
+show:
+        mov     al,ch
+        mov     bh,"0"-" "      ;enable leading zero suppression
+        call    out2
+        mov     al,bl
+        call    out
+        mov     al,cl
+        call    out2
+        mov     al,bl
+        call    out
+        mov     al,dh

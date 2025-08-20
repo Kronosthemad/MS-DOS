@@ -1,0 +1,519 @@
+setyear:
+;set year with value in cx. adjust length of february for this year.
+        mov     byte ptr [year],cl
+chkyr:
+        test    cl,3            ;check for leap year
+        mov     al,28
+        jnz     savfeb          ;28 days if no leap year
+        inc     al              ;add leap day
+savfeb:
+        mov     [montab+1],al   ;store for february
+        ret
+
+;days in year
+yrtab   db      200,166         ;leap year
+        db      200,165
+        db      200,165
+        db      200,165
+
+
+;days of each month
+montab  db      31              ;january
+        db      28              ;february--reset each time year changes
+        db      31              ;march
+        db      30              ;april
+        db      31              ;may
+        db      30              ;june
+        db      31              ;july
+        db      31              ;august
+        db      30              ;september
+        db      31              ;october
+        db      30              ;november
+        db      31              ;december
+
+getdate: ;function call 42
+        push    cs
+        pop     ds
+        call    readtime        ;check for rollover to next day
+        mov     ax,[year]
+        mov     bx,word ptr [day]
+        lds     si,dword ptr [spsave]   ;get pointer to user registers
+        mov     [si.dxsave],bx  ;dh=month, dl=day
+        add     ax,1980         ;put bias back
+        mov     [si.cxsave],ax  ;cx=year
+        mov     al,cs:[weekday]
+ret24:  ret
+
+setdate: ;function call 43
+        mov     al,-1           ;be ready to flag error
+        sub     cx,1980         ;fix bias in year
+        jc      ret24           ;error if not big enough
+        cmp     cx,119          ;year must be less than 2100
+        ja      ret24
+        or      dh,dh
+        jz      ret24
+        or      dl,dl
+        jz      ret24           ;error if either month or day is 0
+        cmp     dh,12           ;check against max. month
+        ja      ret24
+        push    cs
+        pop     ds
+        call    chkyr           ;set feb. up for new year
+        mov     al,dh
+        mov     bx,offset dosgroup:montab-1
+        xlat                    ;look up days in month
+        cmp     al,dl
+        mov     al,-1           ;restore error flag, just in case
+        jb      ret24           ;error if too many days
+        call    setyear
+        mov     word ptr [day],dx       ;set both day and month
+        shr     cx,1
+        shr     cx,1
+        mov     ax,fouryears
+        mov     bx,dx
+        mul     cx
+        mov     cl,byte ptr [year]
+        and     cl,3
+        mov     si,offset dosgroup:yrtab
+        mov     dx,ax
+        shl     cx,1            ;two entries per year, so double count
+        call    dsum            ;add up the days in each year
+        mov     cl,bh           ;month of year
+        mov     si,offset dosgroup:montab
+        dec     cx              ;account for months starting with one
+        call    dsum            ;add up days in each month
+        mov     cl,bl           ;day of month
+        dec     cx              ;account for days starting with one
+        add     dx,cx           ;add in to day total
+        xchg    ax,dx           ;get day count in ax
+        mov     [daycnt],ax
+        call    far ptr biossetdate 
+wkday:
+        mov     ax,[daycnt]
+        xor     dx,dx
+        mov     cx,7
+        inc     ax
+        inc     ax              ;first day was tuesday
+        div     cx              ;compute day of week
+        mov     [weekday],dl
+        xor     al,al           ;flag ok
+ret25:  ret
+
+dsum:
+        mov     ah,0
+        jcxz    ret25
+dsum1:
+        lodsb
+        add     dx,ax
+        loop    dsum1
+        ret
+
+gettime: ;function call 44
+        push    cs
+        pop     ds
+        call    readtime
+        lds     si,dword ptr [spsave]   ;get pointer to user registers
+        mov     [si.dxsave],dx
+        mov     [si.cxsave],cx
+        xor     al,al
+ret26:  ret
+
+settime: ;function call 45
+;time is in cx:dx in hours, minutes, seconds, 1/100 sec.
+        mov     al,-1           ;flag in case of error
+        cmp     ch,24           ;check hours
+        jae     ret26
+        cmp     cl,60           ;check minutes
+        jae     ret26
+        cmp     dh,60           ;check seconds
+        jae     ret26
+        cmp     dl,100          ;check 1/100's
+        jae     ret26
+        call    far ptr biossettime 
+        xor     al,al
+        ret
+
+
+; default handler for division overflow trap
+divov:
+        push    si
+        push    ax
+        mov     si,offset dosgroup:divmes
+        call    outmes
+        pop     ax
+        pop     si
+        int     23h             ;use ctrl-c abort on divide overflow
+        iret
+
+codsiz  equ     $-codstrt       ;size of code segment
+code    ends
+
+
+;***** data area *****
+constants       segment byte
+        org     0
+constrt equ     $               ;start of constants segment
+
+ioname:
+        if      not ibm
+        db      "prn ","lst ","nul ","aux ","con "
+        endif
+        if      ibm
+        db      "com1","prn ","lpt1","nul ","aux ","con "
+        endif
+divmes  db      13,10,"divide overflow",13,10,"$"
+carpos  db      0
+startpos db     0
+pflag   db      0
+dirtydir db     0               ;dirty buffer flag
+numdrv  db      0       ;number of drives
+numio   db      ?       ;number of disk tables
+verflg  db      0       ;initialize with verify off
+contpos dw      0
+dmaadd  dw      80h             ;user's disk transfer address (disp/seg)
+        dw      ?
+endmem  dw      ?
+maxsec  dw      0
+buffer  dw      ?
+bufsecno dw     0
+bufdrvno db     -1
+dirtybuf db     0
+bufdrvbp dw     ?
+dirbufid dw     -1
+day     db      0
+month   db      0
+year    dw      0
+daycnt  dw      -1
+weekday db      0
+curdrv  db      0               ;default to drive a
+drvtab  dw      0               ;address of start of dpbs
+doslen  equ     codsiz+($-constrt)      ;size of code + constants segments
+constants       ends
+
+data    segment word
+; init code overlaps with data area below
+
+        org     0
+inbuf   db      128 dup (?)
+conbuf  db      131 dup (?)             ;the rest of inbuf and console buffer
+lastent dw      ?
+exithold db     4 dup (?)
+fatbase dw      ?
+name1   db      11 dup (?)              ;file name buffer
+attrib  db      ?
+name2   db      11 dup (?)
+name3   db      12 dup (?)
+extfcb  db      ?
+;warning - the following two items are accessed as a word
+creating db     ?
+delall  db      ?
+temp    label   word
+spsave  dw      ?
+sssave  dw      ?
+contstk dw      ?
+seccluspos db   ?       ;position of first sector within cluster
+dskerr  db      ?
+trans   db      ?
+preread db      ?       ;0 means preread; 1 means optional
+readop  db      ?
+thisdrv db      ?
+
+        even
+fcb     dw      ?       ;address of user fcb
+nextadd dw      ?
+recpos  db      4 dup (?)
+reccnt  dw      ?
+lastpos dw      ?
+clusnum dw      ?
+secpos  dw      ?       ;position of first sector accessed
+valsec  dw      ?       ;number of valid (previously written) sectors
+bytsecpos dw    ?       ;position of first byte within sector
+bytpos  db      4 dup (?)               ;byte position in file of access
+bytcnt1 dw      ?       ;no. of bytes in first sector
+bytcnt2 dw      ?       ;no. of bytes in last sector
+seccnt  dw      ?       ;no. of whole sectors
+entfree dw      ?
+
+        db      80h dup (?)     ;stack space
+iostack label   byte
+        db      80h dup (?)
+dskstack label  byte 
+
+        if      dsktest
+nss     dw      ?
+nsp     dw      ?
+        endif
+
+dirbuf label    word
+
+;init code below overlaps with data area above
+
+        org     0
+
+movfat:
+;this section of code is safe from being overwritten by block move
+        rep     movs    byte ptr [di],[si]
+        cld
+        mov     es:[dmaadd+2],dx
+        mov     si,[drvtab]     ;address of first dpb
+        mov     al,-1
+        mov     cl,[numio]      ;number of dpbs
+flgfat:
+        mov     di,es:[si.fat]  ;get pointer to fat
+        dec     di              ;point to dirty byte
+        stosb                   ;flag as unused
+        add     si,dpbsiz       ;point to next dpb
+        loop    flgfat
+        mov     ax,[endmem]
+        call    setmem          ;set up segment
+
+xxx     proc far
+        ret
+xxx     endp
+
+dosinit:
+        cli
+        cld
+        push    cs
+        pop     es
+        mov     es:[endmem],dx
+        lodsb                   ;get no. of drives & no. of i/o drivers
+        mov     es:[numio],al
+        mov     di,offset dosgroup:memstrt
+perdrv:
+        mov     bp,di
+        mov     al,es:[drvcnt]
+        stosb           ;devnum
+        lodsb           ;physical unit no.
+        stosb           ;drvnum
+        cmp     al,15
+        ja      badinit
+        cbw             ;index into fat size table
+        shl     ax,1
+        add     ax,offset dosgroup:fatsiztab
+        xchg    bx,ax
+        lodsw           ;pointer to dpt
+        push    si
+        mov     si,ax
+        lodsw
+        stosw           ;secsiz
+        mov     dx,ax
+        cmp     ax,es:[maxsec]
+        jbe     notmax
+        mov     es:[maxsec],ax
+notmax:
+        lodsb
+        dec     al
+        stosb           ;clusmsk
+        jz      havshft
+        cbw
+figshft:
+        inc     ah
+        sar     al,1
+        jnz     figshft
+        mov     al,ah
+havshft:
+        stosb           ;clusshft
+        movsw           ;firfat (= number of reserved sectors)
+        movsb           ;fatcnt
+        movsw           ;maxent
+        mov     ax,dx           ;secsiz again
+        mov     cl,5
+        shr     ax,cl
+        mov     cx,ax           ;directory entries per sector
+        dec     ax
+        add     ax,es:[bp.maxent]
+        xor     dx,dx
+        div     cx
+        stosw           ;dirsec (temporarily)
+        movsw                   ;dsksiz (temporarily)
+fndfatsiz:
+        mov     al,1
+        mov     dx,1
+getfatsiz:
+        push    dx
+        call    figfatsiz
+        pop     dx
+        cmp     al,dl           ;compare newly computed fat size with trial
+        jz      havfatsiz       ;has sequence converged?
+        cmp     al,dh           ;compare with previous trial
+        mov     dh,dl
+        mov     dl,al           ;shuffle trials
+        jnz     getfatsiz       ;continue iterations if not oscillating
+        dec     word ptr es:[bp.dsksiz] ;damp those oscillations
+        jmp     short fndfatsiz ;try again
+
+badinit:
+        mov     si,offset dosgroup:badmes
+        call    outmes
+        sti
+        hlt
+
+havfatsiz:
+        stosb                   ;fatsiz
+        mul     es:byte ptr[bp.fatcnt]  ;space occupied by all fats
+        add     ax,es:[bp.firfat]
+        stosw                   ;firdir
+        add     ax,es:[bp.dirsec]
+        mov     es:[bp.firrec],ax       ;destroys dirsec
+        call    figmax
+        mov     es:[bp.maxclus],cx
+        mov     ax,bx           ;pointer into fat size table
+        stosw                   ;allocate space for fat pointer
+        mov     al,es:[bp.fatsiz]
+        xor     ah,ah
+        mul     es:[bp.secsiz]
+        cmp     ax,es:[bx]      ;bigger than already allocated
+        jbe     smfat
+        mov     es:[bx],ax
+smfat:
+        pop     si              ;restore pointer to init. table
+        mov     al,es:[drvcnt]
+        inc     al
+        mov     es:[drvcnt],al
+        cmp     al,es:[numio]
+        jae     continit
+        jmp     perdrv  
+
+badinitj:
+        jmp     badinit
+
+continit:
+        push    cs
+        pop     ds
+;calculate true address of buffers, fats, free space
+        mov     bp,[maxsec]
+        mov     ax,offset dosgroup:dirbuf
+        add     ax,bp
+        mov     [buffer],ax     ;start of buffer
+        add     ax,bp
+        mov     [drvtab],ax     ;start of dpbs
+        shl     bp,1            ;two sectors - directory and buffer
+        add     bp,di           ;allocate buffer space
+        add     bp,adjfac       ;true address of fats
+        push    bp
+        mov     si,offset dosgroup:fatsiztab
+        mov     di,si
+        mov     cx,16
+totfatsiz:
+        inc     bp              ;add one for dirty byte
+        inc     bp              ;add one for i/o device number
+        lodsw                   ;get size of this fat
+        xchg    ax,bp
+        stosw                   ;save address of this fat
+        add     bp,ax           ;compute size of next fat
+        cmp     ax,bp           ;if size was zero done
+        loopnz  totfatsiz
+        mov     al,15
+        sub     al,cl           ;compute number of fats used
+        mov     [numdrv],al
+        xor     ax,ax           ;set zero flag
+        repz    scasw           ;make sure all other entries are zero
+        jnz     badinitj
+        add     bp,15           ;true start of free space
+        mov     cl,4
+        shr     bp,cl           ;first free segment
+        mov     dx,cs
+        add     dx,bp
+        mov     bx,0fh
+        mov     cx,[endmem]
+        cmp     cx,1            ;use memory scan?
+        jnz     setend
+        mov     cx,dx           ;start scanning just after dos
+memscan:
+        inc     cx
+        jz      setend
+        mov     ds,cx
+        mov     al,[bx]
+        not     al
+        mov     [bx],al
+        cmp     al,[bx]
+        not     al
+        mov     [bx],al
+        jz      memscan
+setend:
+        if      highmem
+        sub     cx,bp
+        mov     bp,cx           ;segment of dos
+        mov     dx,cs           ;program segment
+        endif
+        if      not highmem
+        mov     bp,cs
+        endif
+; bp has segment of dos (whether to load high or run in place)
+; dx has program segment (whether after dos or overlaying dos)
+; cx has size of memory in paragraphs (reduced by dos size if highmem)
+        mov     cs:[endmem],cx
+        if      highmem
+        mov     es,bp
+        xor     si,si
+        mov     di,si
+        mov     cx,(doslen+1)/2
+        push    cs
+        pop     ds
+        rep movsw               ;move dos to high memory
+        endif
+        xor     ax,ax
+        mov     ds,ax
+        mov     es,ax
+        mov     di,intbase
+        mov     ax,offset dosgroup:quit
+        stosw                   ;set abort address--displacement
+        mov     ax,bp
+        mov     byte ptr ds:[entrypoint],longjump
+        mov     word ptr ds:[entrypoint+1],offset dosgroup:entry
+        mov     word ptr ds:[entrypoint+3],ax
+        mov     word ptr ds:[0],offset dosgroup:divov   ;set default divide trap address
+        mov     ds:[2],ax
+        mov     cx,9
+        rep stosw               ;set 5 segments (skip 2 between each)
+        mov     word ptr ds:[intbase+4],offset dosgroup:command
+        mov     word ptr ds:[intbase+12],offset dosgroup:iret   ;ctrl-c exit
+        mov     word ptr ds:[intbase+16],offset dosgroup:iret   ;fatal error exit
+        mov     ax,offset biosread
+        stosw
+        mov     ax,biosseg
+        stosw
+        stosw                   ;add 2 to di
+        stosw
+        mov     word ptr ds:[intbase+18h],offset bioswrite
+        mov     word ptr ds:[exit],100h
+        mov     word ptr ds:[exit+2],dx
+        if      not ibm
+        mov     si,offset dosgroup:header
+        call    outmes
+        endif
+        push    cs
+        pop     ds
+        push    cs
+        pop     es
+;move the fats into position
+        mov     al,[numio]
+        cbw
+        xchg    ax,cx
+        mov     di,offset dosgroup:memstrt.fat
+fatpoint:
+        mov     si,word ptr [di]        ;get address within fat address table
+        movsw                           ;set address of this fat
+        add     di,dpbsiz-2             ;point to next dpb
+        loop    fatpoint
+        pop     cx                      ;true address of first fat
+        mov     si,offset dosgroup:memstrt      ;place to move dpbs from
+        mov     di,[drvtab]             ;place to move dpbs to
+        sub     cx,di                   ;total length of dpbs
+        cmp     di,si
+        jbe     movjmp                  ;are we moving to higher or lower memory?
+        dec     cx                      ;move backwards to higher memory
+        add     di,cx
+        add     si,cx
+        inc     cx
+        std
+movjmp:
+        mov     es,bp
+        jmp     movfat
+
+figfatsiz:
+        mul     es:byte ptr[bp.fatcnt]
+        add     ax,es:[bp.firfat]
+        add     ax,es:[bp.dirsec]
+

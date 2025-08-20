@@ -1,0 +1,480 @@
+
+nostop:
+        cmp     al,"p"-"@"
+        jz      inchk
+        if      not toglprn
+        cmp     al,"n"-"@"
+        jz      inchk
+        endif
+        cmp     al,"c"-"@"
+        jz      inchk
+        ret
+
+conout: ;system call 2
+        mov     al,dl
+out:
+        cmp     al,20h
+        jb      ctrlout
+        cmp     al,7fh
+        jz      outch
+        inc     cs:byte ptr [carpos]
+outch:
+        push    ax
+        call    statchk
+        pop     ax
+        call    far ptr biosout 
+        test    cs:byte ptr [pflag],-1
+        jz      ret18
+        call    far ptr biosprint 
+ret18:  ret
+
+statchk:
+        call    far ptr biosstat 
+        jz      ret18
+        cmp     al,'s'-'@'
+        jnz     nostop
+        call    far ptr biosin          ;eat cntrl-s
+inchk:
+        call    far ptr biosin 
+        cmp     al,'p'-'@'
+        jz      printon
+        if      not toglprn
+        cmp     al,'n'-'@'
+        jz      printoff
+        endif
+        cmp     al,'c'-'@'
+        jnz     ret18
+; ctrl-c handler.
+; "^c" and cr/lf is printed. then the user registers are restored and the
+; user ctrl-c handler is executed. at this point the top of the stack has
+; 1) the interrupt return address should the user ctrl-c handler wish to
+; allow processing to continue; 2) the original interrupt return address
+; to the code that performed the function call in the first place. if the
+; user ctrl-c handler wishes to continue, it must leave all registers
+; unchanged and iret. the function that was interrupted will simply be
+; repeated.
+        mov     al,3            ;display "^c"
+        call    bufout
+        call    crlf
+        cli                     ;prepare to play with stack
+        mov     ss,cs:[sssave]
+        mov     sp,cs:[spsave]  ;user stack now restored
+        pop     ax
+        pop     bx
+        pop     cx
+        pop     dx
+        pop     si
+        pop     di
+        pop     bp
+        pop     ds
+        pop     es              ;user registers now restored
+        int     contc           ;execute user ctrl-c handler
+        jmp     command         ;repeat command otherwise
+
+printon:
+        if      toglprn
+        not     cs:byte ptr [pflag]
+        ret
+        endif
+        if      not toglprn
+        mov     cs:byte ptr [pflag],1
+        ret
+
+printoff:
+        mov     cs:byte ptr [pflag],0
+        ret
+        endif
+
+ctrlout:
+        cmp     al,13
+        jz      zerpos
+        cmp     al,8
+        jz      backpos
+        cmp     al,9
+        jnz     outchj
+        mov     al,cs:[carpos]
+        or      al,0f8h
+        neg     al
+tab:
+        push    cx
+        mov     cl,al
+        mov     ch,0
+        jcxz    poptab
+tablp:
+        mov     al," "
+        call    out
+        loop    tablp
+poptab:
+        pop     cx
+ret19:  ret
+
+zerpos:
+        mov     cs:byte ptr [carpos],0
+outchj: jmp     outch
+
+backpos:
+        dec     cs:byte ptr [carpos]
+        jmp     outch
+
+
+constat: ;system call 11
+        call    statchk
+        mov     al,0 
+        jz      ret19
+        or      al,-1
+        ret
+
+
+conin:  ;system call 1
+        call    in
+        push    ax
+        call    out
+        pop     ax
+        ret
+
+
+in:     ;system call 8
+        call    inchk
+        jz      in
+ret29:  ret
+
+rawio:  ;system call 6
+        mov     al,dl
+        cmp     al,-1
+        jnz     rawout
+        lds     si,dword ptr cs:[spsave]                ;get pointer to register save area
+        call    far ptr biosstat
+        jnz     resflg
+        or      byte ptr [si.fsave],40h ;set user's zero flag
+        xor     al,al
+        ret
+
+resflg:
+        and     byte ptr [si.fsave],0ffh-40h    ;reset user's zero flag
+rawinp: ;system call 7
+        call    far ptr biosin 
+        ret
+rawout:
+        call    far ptr biosout 
+        ret
+
+list:   ;system call 5
+        mov     al,dl
+listout:
+        push    ax
+        call    statchk
+        pop     ax
+        call    far ptr biosprint 
+ret20:  ret
+
+prtbuf: ;system call 9
+        mov     si,dx
+outstr:
+        lodsb
+        cmp     al,"$"
+        jz      ret20
+        call    out
+        jmp     short outstr
+
+outmes: ;string output for internal messages
+        lods    cs:byte ptr [si]
+        cmp     al,"$"
+        jz      ret20
+        call    out
+        jmp     short outmes
+
+
+makefcb: ;interrupt call 41
+drvbit  equ     2
+nambit  equ     4
+extbit  equ     8
+        mov     dl,0            ;flag--not ambiguous file name
+        test    al,drvbit       ;use current drive field if default?
+        jnz     defdrv
+        mov     byte ptr es:[di],0      ;no - use default drive
+defdrv:
+        inc     di
+        mov     cx,8
+        test    al,nambit       ;use current name fiels as defualt?
+        xchg    ax,bx           ;save bits in bx
+        mov     al," "
+        jz      fillb           ;if not, go fill with blanks
+        add     di,cx
+        xor     cx,cx           ;don't fill any
+fillb:
+        rep     stosb
+        mov     cl,3
+        test    bl,extbit       ;use current extension as default
+        jz      fillb2
+        add     di,cx
+        xor     cx,cx
+fillb2:
+        rep     stosb
+        xchg    ax,cx           ;put zero in ax
+        stosw
+        stosw                   ;initialize two words after to zero
+        sub     di,16           ;point back at start
+        test    bl,1            ;scan off separators if not zero
+        jz      skpspc
+        call    scanb           ;peel off blanks and tabs
+        call    delim           ;is it a one-time-only delimiter?
+        jnz     noscan
+        inc     si              ;skip over the delimiter
+skpspc:
+        call    scanb           ;always kill preceding blanks and tabs
+noscan:
+        call    getlet
+        jbe     nodrv           ;quit if termination character
+        cmp     byte ptr[si],":"        ;check for potential drive specifier
+        jnz     nodrv
+        inc     si              ;skip over colon
+        sub     al,"@"          ;convert drive letter to binary drive number
+        jbe     baddrv          ;valid drive numbers are 1-15
+        cmp     al,cs:[numdrv]
+        jbe     havdrv
+baddrv:
+        mov     dl,-1
+havdrv:
+        stosb           ;put drive specifier in first byte
+        inc     si
+        dec     di      ;counteract next two instructions
+nodrv:
+        dec     si      ;back up
+        inc     di      ;skip drive byte
+        mov     cx,8
+        call    getword         ;get 8-letter file name
+        cmp     byte ptr [si],"."
+        jnz     nodot
+        inc     si              ;skip over dot if present
+        mov     cx,3            ;get 3-letter extension
+        call    mustgetword
+nodot:
+        lds     bx,cs:dword ptr [spsave]
+        mov     [bx.sisave],si
+        mov     al,dl
+        ret
+
+nonam:
+        add     di,cx
+        dec     si
+        ret
+
+getword:
+        call    getlet
+        jbe     nonam           ;exit if invalid character
+        dec     si
+mustgetword:
+        call    getlet
+        jbe     fillnam
+        jcxz    mustgetword
+        dec     cx
+        cmp     al,"*"          ;check for ambiguous file specifier
+        jnz     nostar
+        mov     al,"?"
+        rep     stosb
+nostar:
+        stosb
+        cmp     al,"?"
+        jnz     mustgetword
+        or      dl,1            ;flag ambiguous file name
+        jmp     mustgetword
+fillnam:
+        mov     al," "
+        rep     stosb
+        dec     si
+ret21:  ret
+
+scanb:
+        lodsb
+        call    spchk
+        jz      scanb
+        dec     si
+        ret
+
+getlet:
+;get a byte from [si], convert it to upper case, and compare for delimiter.
+;zf set if a delimiter, cy set if a control character (other than tab).
+        lodsb
+        and     al,7fh
+        cmp     al,"a"
+        jb      chk
+        cmp     al,"z"
+        ja      chk
+        sub     al,20h          ;convert to upper case
+chk:
+        cmp     al,"."
+        jz      ret21
+        cmp     al,'"'
+        jz      ret21
+        cmp     al,"/"
+        jz      ret21
+        cmp     al,"["
+        jz      ret21
+        cmp     al,"]"
+        jz      ret21
+
+        if      ibm
+delim:
+        endif
+        cmp     al,":"          ;allow ":" as separator in ibm version
+        jz      ret21
+        if      not ibm
+delim:
+        endif
+
+        cmp     al,"+"
+        jz      ret101
+        cmp     al,"="
+        jz      ret101
+        cmp     al,";"
+        jz      ret101
+        cmp     al,","
+        jz      ret101
+spchk:
+        cmp     al,9            ;filter out tabs too
+        jz      ret101
+;warning! " " must be the last compare
+        cmp     al," "
+ret101: ret
+
+setvect: ; interrupt call 37
+        xor     bx,bx
+        mov     es,bx
+        mov     bl,al
+        shl     bx,1
+        shl     bx,1
+        mov     es:[bx],dx
+        mov     es:[bx+2],ds
+        ret
+
+
+newbase: ; interrupt call 38
+        mov     es,dx
+        lds     si,cs:dword ptr [spsave]
+        mov     ds,[si.cssave]
+        xor     si,si
+        mov     di,si
+        mov     ax,ds:[2]
+        mov     cx,80h
+        rep     movsw
+
+setmem:
+
+; inputs:
+;       ax = size of memory in paragraphs
+;       dx = segment
+; function:
+;       completely prepares a program base at the 
+;       specified segment.
+; outputs:
+;       ds = dx
+;       es = dx
+;       [0] has int 20h
+;       [2] = first unavailable segment ([endmem])
+;       [5] to [9] form a long call to the entry point
+;       [10] to [13] have exit address (from int 22h)
+;       [14] to [17] have ctrl-c exit address (from int 23h)
+;       [18] to [21] have fatal error address (from int 24h)
+; dx,bp unchanged. all other registers destroyed.
+
+        xor     cx,cx
+        mov     ds,cx
+        mov     es,dx
+        mov     si,exit
+        mov     di,savexit
+        movsw
+        movsw
+        movsw
+        movsw
+        movsw
+        movsw
+        mov     es:[2],ax
+        sub     ax,dx
+        cmp     ax,maxdif
+        jbe     havdif
+        mov     ax,maxdif
+havdif:
+        mov     bx,entrypointseg
+        sub     bx,ax
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1
+        mov     ds,dx
+        mov     ds:[6],ax
+        mov     ds:[8],bx
+        mov     ds:[0],20cdh    ;"int inttab"
+        mov     ds:(byte ptr [5]),longcall
+        ret
+
+date16:
+        push    cx
+        call    readtime
+        shl     cl,1            ;minutes to left part of byte
+        shl     cl,1
+        shl     cx,1            ;push hours and minutes to left end
+        shl     cx,1
+        shl     cx,1
+        shr     dh,1            ;count every two seconds
+        or      cl,dh           ;combine seconds with hours and minutes
+        mov     dx,cx
+        pop     cx
+        mov     ax,word ptr [month]     ;fetch month and year
+        shl     al,1                    ;push month to left to make room for day
+        shl     al,1
+        shl     al,1
+        shl     al,1
+        shl     ax,1
+        or      al,[day]
+ret22:  ret
+
+fouryears       equ     3*365+366
+
+readtime:
+;gets time in cx:dx. figures new date if it has changed.
+;uses ax, cx, dx.
+        call    far ptr biosgettime 
+        cmp     ax,[daycnt]     ;see if day count is the same
+        jz      ret22
+        cmp     ax,fouryears*30 ;number of days in 120 years
+        jae     ret22           ;ignore if too large
+        mov     [daycnt],ax
+        push    si
+        push    cx
+        push    dx              ;save time
+        xor     dx,dx
+        mov     cx,fouryears    ;number of days in 4 years
+        div     cx              ;compute number of 4-year units
+        shl     ax,1
+        shl     ax,1
+        shl     ax,1            ;multiply by 8 (no. of half-years)
+        mov     cx,ax           ;<240 implies ah=0
+        mov     si,offset dosgroup:yrtab        ;table of days in each year
+        call    dslide          ;find out which of four years we're in
+        shr     cx,1            ;convert half-years to whole years
+        jnc     sk              ;extra half-year?
+        add     dx,200
+sk:
+        call    setyear
+        mov     cl,1            ;at least at first month in year
+        mov     si,offset dosgroup:montab       ;table of days in each month
+        call    dslide          ;find out which month we're in
+        mov     [month],cl
+        inc     dx              ;remainder is day of month (start with one)
+        mov     [day],dl
+        call    wkday           ;set day of week
+        pop     dx
+        pop     cx
+        pop     si
+ret23:  ret
+
+dslide:
+        mov     ah,0
+dslide1:
+        lodsb           ;get count of days
+        cmp     dx,ax           ;see if it will fit
+        jb      ret23           ;if not, done
+        sub     dx,ax
+        inc     cx              ;count one more month/year
+        jmp     short dslide1
+

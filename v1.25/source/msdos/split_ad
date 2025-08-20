@@ -1,0 +1,530 @@
+setup:
+
+; inputs:
+;       ds:di point to fcb
+;       dx:ax = record position in file of disk transfer
+;       cx = record count
+; outputs:
+;       ds = cs
+;       es:di point to fcb
+;       bl = devid from fcb
+;       cx = no. of bytes to transfer
+;       bp = base of drive parameters
+;       si = fat pointer
+;       [reccnt] = record count
+;       [recpos] = record position in file
+;       [fcb] = di
+;       [nextadd] = displacement of disk transfer within segment
+;       [secpos] = position of first sector
+;       [bytpos] = byte position in file
+;       [bytsecpos] = byte position in first sector
+;       [clusnum] = first cluster
+;       [seccluspos] = sector within first cluster
+;       [dskerr] = 0 (no errors yet)
+;       [trans] = 0 (no transfers yet)
+;       [thisdrv] = physical drive unit number
+; if setup detects no records will be transfered, it returns 1 level up 
+; with cx = 0.
+
+        push    ax
+        mov     al,[di]
+        dec     al
+        mov     cs:[thisdrv],al
+        mov     al,[di.devid]
+        mov     si,[di.recsiz]
+        or      si,si
+        jnz     havrecsiz
+        mov     si,128
+        mov     [di.recsiz],si
+havrecsiz:
+        push    ds
+        pop     es              ;set es to ds
+        push    cs
+        pop     ds              ;set ds to cs
+        or      al,al           ;is it a device?
+        jns     notdevice
+        mov     al,0            ;fake in drive 0 so we can get sp
+notdevice:
+        call    getbp
+        pop     ax
+        jc      nofilerr
+        cmp     si,64           ;check if highest byte of recpos is significant
+        jb      smalrec
+        mov     dh,0            ;ignore msb if record >= 64 bytes
+smalrec:
+        mov     [reccnt],cx
+        mov     word ptr [recpos],ax
+        mov     word ptr [recpos+2],dx
+        mov     [fcb],di
+        mov     bx,[dmaadd]
+        mov     [nextadd],bx
+        mov     byte ptr [dskerr],0
+        mov     byte ptr [trans],0
+        mov     bx,dx
+        mul     si
+        mov     word ptr [bytpos],ax
+        push    dx
+        mov     ax,bx
+        mul     si
+        pop     bx
+        add     ax,bx
+        adc     dx,0            ;ripple carry
+        jnz     eoferr
+        mov     word ptr [bytpos+2],ax
+        mov     dx,ax
+        mov     ax,word ptr [bytpos]
+        mov     bx,[bp.secsiz]
+        cmp     dx,bx           ;see if divide will overflow
+        jnc     eoferr
+        div     bx
+        mov     [secpos],ax
+        mov     [bytsecpos],dx
+        mov     dx,ax
+        and     al,[bp.clusmsk]
+        mov     [seccluspos],al
+        mov     ax,cx           ;record count
+        mov     cl,[bp.clusshft]
+        shr     dx,cl
+        mov     [clusnum],dx
+        mul     si              ;multiply by bytes per record
+        mov     cx,ax
+        add     ax,[dmaadd]     ;see if it will fit in one segment
+        adc     dx,0
+        jz      ok              ;must be less than 64k
+        mov     ax,[dmaadd]
+        neg     ax              ;amount of room left in segment
+        jnz     partseg         ;all 64k available?
+        dec     ax              ;if so, reduce by one
+partseg:
+        xor     dx,dx
+        div     si              ;how many records will fit?
+        mov     [reccnt],ax
+        mul     si              ;translate that back into bytes
+        mov     byte ptr [dskerr],2     ;flag that trimming took place
+        mov     cx,ax
+        jcxz    noroom
+ok:
+        mov     bl,es:[di.devid]
+        mov     si,[bp.fat]
+        ret
+
+eoferr:
+        mov     byte ptr [dskerr],1
+        xor     cx,cx
+noroom:
+        pop     bx              ;kill return address
+        ret
+
+breakdown:
+
+;inputs:
+;       ds = cs
+;       cx = length of disk transfer in bytes
+;       bp = base of drive parameters
+;       [bytsecpos] = byte position witin first sector
+;outputs:
+;       [bytcnt1] = bytes to transfer in first sector
+;       [seccnt] = no. of whole sectors to transfer
+;       [bytcnt2] = bytes to transfer in last sector
+;ax, bx, dx destroyed. no other registers affected.
+
+        mov     ax,[bytsecpos]
+        mov     bx,cx
+        or      ax,ax
+        jz      savfir          ;partial first sector?
+        sub     ax,[bp.secsiz]
+        neg     ax              ;max number of bytes left in first sector
+        sub     bx,ax           ;subtract from total length
+        jae     savfir
+        add     ax,bx           ;don't use all of the rest of the sector
+        xor     bx,bx           ;and no bytes are left
+savfir:
+        mov     [bytcnt1],ax
+        mov     ax,bx
+        xor     dx,dx
+        div     [bp.secsiz]     ;how many whole sectors?
+        mov     [seccnt],ax
+        mov     [bytcnt2],dx    ;bytes remaining for last sector
+ret10:  ret
+
+
+fndclus:
+
+; inputs:
+;       ds = cs
+;       cx = no. of clusters to skip
+;       bp = base of drive parameters
+;       si = fat pointer
+;       es:di point to fcb
+; outputs:
+;       bx = last cluster skipped to
+;       cx = no. of clusters remaining (0 unless eof)
+;       dx = position of last cluster
+; di destroyed. no other registers affected.
+
+        mov     bx,es:[di.lstclus]
+        mov     dx,es:[di.cluspos]
+        or      bx,bx
+        jz      noclus
+        sub     cx,dx
+        jnb     findit
+        add     cx,dx
+        xor     dx,dx
+        mov     bx,es:[di.firclus]
+findit:
+        jcxz    ret10
+skpclp:
+        call    unpack
+        cmp     di,0ff8h
+        jae     ret10
+        xchg    bx,di
+        inc     dx
+        loop    skpclp
+        ret
+noclus:
+        inc     cx
+        dec     dx
+        ret
+
+
+bufsec:
+; inputs:
+;       al = 0 if buffer must be read, 1 if no pre-read needed
+;       bp = base of drive parameters
+;       [clusnum] = physical cluster number
+;       [seccluspos] = sector position of transfer within cluster
+;       [bytcnt1] = size of transfer
+; function:
+;       insure specified sector is in buffer, flushing buffer before
+;       read if necessary.
+; outputs:
+;       si = pointer to buffer
+;       di = pointer to transfer address
+;       cx = number of bytes
+;       [nextadd] updated
+;       [trans] set to indicate a transfer will occur
+
+        mov     dx,[clusnum]
+        mov     bl,[seccluspos]
+        call    figrec
+        mov     [preread],al
+        cmp     dx,[bufsecno]
+        jnz     getsec
+        mov     al,[bufdrvno]
+        cmp     al,[thisdrv]
+        jz      finbuf          ;already have it?
+getsec:
+        xor     al,al
+        xchg    [dirtybuf],al   ;read dirty flag and reset it
+        or      al,al
+        jz      rdsec
+        push    dx
+        push    bp
+        mov     bp,[bufdrvbp]
+        mov     bx,[buffer]
+        mov     cx,1
+        mov     dx,[bufsecno]
+        call    dwrite
+        pop     bp
+        pop     dx
+rdsec:
+        test    byte ptr [preread],-1
+        jnz     setbuf
+        xor     ax,ax
+        mov     [bufsecno],ax           ;set buffer valid in case of disk error
+        dec     ax
+        mov     [bufdrvno],al
+        mov     bx,[buffer]
+        mov     cx,1
+        push    dx
+        call    dread
+        pop     dx
+setbuf:
+        mov     [bufsecno],dx
+        mov     al,[thisdrv]
+        mov     [bufdrvno],al
+        mov     [bufdrvbp],bp
+finbuf:
+        mov     byte ptr [trans],1      ;a transfer is taking place
+        mov     di,[nextadd]
+        mov     si,di
+        mov     cx,[bytcnt1]
+        add     si,cx
+        mov     [nextadd],si
+        mov     si,[buffer]
+        add     si,[bytsecpos]
+        ret
+
+bufrd:
+        xor     al,al           ;pre-read necessary
+        call    bufsec
+        push    es
+        mov     es,[dmaadd+2]
+        shr     cx,1
+        jnc     evenrd
+        movsb
+evenrd:
+        rep     movsw
+        pop     es
+        ret
+
+bufwrt:
+        mov     ax,[secpos]
+        inc     ax              ;set for next sector
+        mov     [secpos],ax
+        cmp     ax,[valsec]     ;has sector been written before?
+        mov     al,1
+        ja      noread          ;skip preread if secpos>valsec
+        mov     al,0
+noread:
+        call    bufsec
+        xchg    di,si
+        push    ds
+        push    es
+        push    cs
+        pop     es
+        mov     ds,[dmaadd+2]
+        shr     cx,1
+        jnc     evenwrt
+        movsb
+evenwrt:
+        rep     movsw
+        pop     es
+        pop     ds
+        mov     byte ptr [dirtybuf],1
+        ret
+
+nextsec:
+        test    byte ptr [trans],-1
+        jz      clret
+        mov     al,[seccluspos]
+        inc     al
+        cmp     al,[bp.clusmsk]
+        jbe     savpos
+        mov     bx,[clusnum]
+        cmp     bx,0ff8h
+        jae     nonext
+        mov     si,[bp.fat]
+        call    unpack
+        mov     [clusnum],di
+        inc     [lastpos]
+        mov     al,0
+savpos:
+        mov     [seccluspos],al
+clret:
+        clc
+        ret
+nonext:
+        stc
+        ret
+
+tranbuf:
+        lodsb
+        stosb
+        cmp     al,13           ;check for carriage return
+        jnz     normch
+        mov     byte ptr [si],10
+normch:
+        cmp     al,10
+        loopnz  tranbuf
+        jnz     endrdcon
+        call    out             ;transmit linefeed
+        xor     si,si
+        or      cx,cx
+        jnz     getbuf
+        or      al,1            ;clear zero flag--not end of file
+endrdcon:
+        mov     [contpos],si
+endrddev:
+        mov     [nextadd],di
+        pop     es
+        jnz     setfcbj         ;zero set if ctrl-z found in input
+        mov     di,[fcb]
+        and     es:byte ptr [di.devid],0ffh-40h ;mark as no more data available
+setfcbj:
+        jmp     setfcb
+
+readdev:
+        push    es
+        les     di,dword ptr [dmaadd]
+        inc     bl
+        jz      readcon
+        inc     bl
+        jnz     endrddev
+readaux:
+        call    auxin
+        stosb
+        cmp     al,1ah
+        loopnz  readaux
+        jmp     short endrddev
+
+readcon:
+        push    cs
+        pop     ds
+        mov     si,[contpos]
+        or      si,si
+        jnz     tranbuf
+        cmp     byte ptr [conbuf],128
+        jz      getbuf
+        mov     word ptr [conbuf],0ff80h        ;set up 128-byte buffer with no template
+getbuf:
+        push    cx
+        push    es
+        push    di
+        mov     dx,offset dosgroup:conbuf
+        call    bufin           ;get input buffer
+        pop     di
+        pop     es
+        pop     cx
+        mov     si,2 + offset dosgroup:conbuf
+        cmp     byte ptr [si],1ah       ;check for ctrl-z in first character
+        jnz     tranbuf
+        mov     al,1ah
+        stosb
+        mov     al,10
+        call    out             ;send linefeed
+        xor     si,si
+        jmp     short endrdcon
+
+rderr:
+        xor     cx,cx
+        jmp     wrterr
+
+rdlastj:jmp     rdlast
+
+load:
+
+; inputs:
+;       ds:di point to fcb
+;       dx:ax = position in file to read
+;       cx = no. of records to read
+; outputs:
+;       dx:ax = position of last record read
+;       cx = no. of bytes read
+;       es:di point to fcb
+;       lstclus, cluspos fields in fcb set
+
+        call    setup
+        or      bl,bl           ;check for named device i/o
+        js      readdev
+        mov     ax,es:word ptr [di.filsiz]
+        mov     bx,es:word ptr [di.filsiz+2]
+        sub     ax,word ptr [bytpos]
+        sbb     bx,word ptr [bytpos+2]
+        jb      rderr
+        jnz     enuf
+        or      ax,ax
+        jz      rderr
+        cmp     ax,cx
+        jae     enuf
+        mov     cx,ax
+enuf:
+        call    breakdown
+        mov     cx,[clusnum]
+        call    fndclus
+        or      cx,cx
+        jnz     rderr
+        mov     [lastpos],dx
+        mov     [clusnum],bx
+        cmp     [bytcnt1],0
+        jz      rdmid
+        call    bufrd
+rdmid:
+        cmp     [seccnt],0
+        jz      rdlastj
+        call    nextsec
+        jc      setfcb
+        mov     byte ptr [trans],1      ;a transfer is taking place
+onsec:
+        mov     dl,[seccluspos]
+        mov     cx,[seccnt]
+        mov     bx,[clusnum]
+rdlp:
+        call    optimize
+        push    di
+        push    ax
+        push    ds
+        mov     ds,[dmaadd+2]
+        push    dx
+        push    bx
+        pushf                   ;save carry flag
+        call dread
+        popf                    ;restore carry flag
+        pop     di              ;initial transfer address
+        pop     ax              ;first sector transfered
+        pop     ds
+        jc      notbuffed       ;was one of those sectors in the buffer?
+        cmp     byte ptr [dirtybuf],0   ;is buffer dirty?
+        jz      notbuffed       ;if not no problem
+;we have transfered in a sector from disk when a dirty copy of it is in the buffer.
+;we must transfer the sector from the buffer to correct memory address
+        sub     ax,[bufsecno]   ;how many sectors into the transfer?
+        neg     ax
+        mov     cx,[bp.secsiz]
+        mul     cx              ;how many bytes into the transfer?
+        add     di,ax
+        mov     si,[buffer]
+        push    es
+        mov     es,[dmaadd+2]   ;get disk transfer segment
+        shr     cx,1
+        rep     movsw
+        jnc     evenmov
+        movsb
+evenmov:
+        pop     es
+notbuffed:
+        pop     cx
+        pop     bx
+        jcxz    rdlast
+        cmp     bx,0ff8h
+        jae     setfcb
+        mov     dl,0
+        inc     [lastpos]       ;we'll be using next cluster
+        jmp     short rdlp
+
+setfcb:
+        mov     si,[fcb]
+        mov     ax,[nextadd]
+        mov     di,ax
+        sub     ax,[dmaadd]     ;number of bytes transfered
+        xor     dx,dx
+        mov     cx,es:[si.recsiz]
+        div     cx              ;number of records
+        cmp     ax,[reccnt]     ;check if all records transferred
+        jz      fullrec
+        mov     byte ptr [dskerr],1
+        or      dx,dx
+        jz      fullrec         ;if remainder 0, then full record transfered
+        mov     byte ptr [dskerr],3     ;flag partial last record
+        sub     cx,dx           ;bytes left in last record
+        push    es
+        mov     es,[dmaadd+2]
+        xchg    ax,bx           ;save the record count temporarily
+        xor     ax,ax           ;fill with zeros
+        shr     cx,1
+        jnc     evenfil
+        stosb
+evenfil:
+        rep     stosw
+        xchg    ax,bx           ;restore record count to ax
+        pop     es
+        inc     ax              ;add last (partial) record to total
+fullrec:
+        mov     cx,ax
+        mov     di,si           ;es:di point to fcb
+setclus:
+        mov     ax,[clusnum]
+        mov     es:[di.lstclus],ax
+        mov     ax,[lastpos]
+        mov     es:[di.cluspos],ax
+addrec:
+        mov     ax,word ptr [recpos]
+        mov     dx,word ptr [recpos+2]
+        jcxz    ret28           ;if no records read, don't change position
+        dec     cx
+        add     ax,cx           ;update current record position
+        adc     dx,0
+        inc     cx      
+ret28:  ret
+
+

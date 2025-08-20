@@ -1,0 +1,32 @@
+figmax:
+;ax has equivalent of firrec
+        sub     ax,es:[bp.dsksiz]
+        neg     ax
+        mov     cl,es:[bp.clusshft]
+        shr     ax,cl
+        inc     ax
+        mov     cx,ax           ;maxclus
+        inc     ax
+        mov     dx,ax
+        shr     dx,1
+        adc     ax,dx           ;size of fat in bytes
+        mov     si,es:[bp.secsiz]
+        add     ax,si
+        dec     ax
+        xor     dx,dx
+        div     si
+        ret
+
+badmes:
+        db      13,10,"init table bad",13,10,"$"
+
+fatsiztab:
+        dw      0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+
+drvcnt  db      0
+
+memstrt label   word
+adjfac  equ     dirbuf-memstrt
+data    ends
+        end
+

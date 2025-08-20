@@ -1,0 +1,500 @@
+; command version 1.17
+;
+; this version of command is divided into three distinct parts. first
+; is the resident portion, which includes handlers for interrupts
+; 22h (terminate), 23h (cntrl-c), 24h (fatal error), and 27h (stay
+; resident); it also has code to test and, if necessary, reload the
+; transient portion. following the resident is the init code, which is
+; overwritten after use. then comes the transient portion, which
+; includes all command processing (whether internal or external).
+; the transient portion loads at the end of physical memory, and it may
+; be overlayed by programs that need as much memory as possible. when
+; the resident portion of command regains control from a user program,
+; a checksum is performed on the transient portion to see if it must be
+; reloaded. thus programs which do not need maximum memory will save
+; the time required to reload command when they terminate.
+
+;use the following booleans to set assembly flags
+false   equ     0
+true    equ     not false
+
+ibmver  equ     false   ;switch to build ibm version of command
+msver   equ     true    ;switch to build ms-dos version of command
+
+highmem equ     true    ;run resident part above transient (high memory)
+
+linperpag       equ     23
+normperlin      equ     1
+wideperlin      equ     5
+
+        if      ibmver
+sym     equ     ">"
+comdrv  equ     1
+        endif
+
+        if      msver
+sym     equ     ":"
+comdrv  equ     0
+        endif
+
+fcb     equ     5ch
+dskreset equ    13
+setbase equ     38
+srchfrst equ    17
+srchnxt equ     18
+renam   equ     23
+inchar  equ     1
+getfat  equ     27
+open    equ     15
+close   equ     16
+make    equ     22
+delete  equ     19
+rdblk   equ     39
+wrblk   equ     40
+setdma  equ     26
+seldrv  equ     14
+getdrv  equ     25
+printbuf equ    9
+outch   equ     2
+inbuf   equ     10
+getdate equ     2ah
+setdate equ     2bh
+gettime equ     2ch
+settime equ     2dh
+rr      equ     33
+reclen  equ     14
+fillen  equ     16
+offdate equ     20
+
+
+;the following are all of the segments used in the load order
+
+coderes segment
+coderes ends
+
+datares segment byte
+datares ends
+
+init    segment byte
+init    ends
+
+tail    segment para
+tail    ends
+
+trancode        segment para
+trancode        ends
+
+trandata        segment byte
+trandata        ends
+
+transpace       segment byte
+transpace       ends
+
+resgroup        group   coderes,datares,init,tail
+trangroup       group   trancode,trandata,transpace
+
+;data for resident portion
+
+datares segment byte
+        org     0
+zero    =       $
+mesbas  dw      offset resgroup:err0
+        dw      offset resgroup:err2
+        dw      offset resgroup:err4
+        dw      offset resgroup:err6
+        dw      offset resgroup:err8
+        dw      offset resgroup:err10
+        dw      offset resgroup:err12
+err0    db      "write protect$"
+err2    db      "not ready$"
+err4    db      "data$"
+err6    db      "seek$"
+err8    db      "sector not found$"
+err10   db      "write fault$"
+err12   db      "disk$"
+read    db      "read$"
+write   db      "writ$"
+errmes  db      " error "
+iotyp   db      "writing"
+drvnum  db      " drive "
+drvlet  db      "a"
+newlin  db      13,10,"$"
+request db      "abort, retry, ignore? $"
+badfat  db      13,10,"file allocation table bad,$"
+combad  db      13,10,"invalid command.com"
+needcom db      13,10,"insert dos disk in "
+        if      ibmver
+        db      "drive a"
+        else
+        db      "default drive"
+        endif
+prompt  db      13,10,"and strike any key when ready",13,10,"$"
+needbat db      13,10,"insert disk with batch file$"
+endbatmes db    13,10,"terminate batch job (y/n)? $"
+loading db      0
+batfcb  db      1,"autoexecbat"
+        db      21 dup(?)
+        dw      0
+        dw      0               ;initialize rr field to zero
+parmtab dw      10 dup(-1)      ;no parameters initially
+batch   db      1               ;assume batch mode initially
+comfcb  db      comdrv,"command com"
+        db      25 dup(?)
+trans   dw      offset trangroup:command
+trnseg  dw      ?
+batbyt  db      ?
+memsiz  dw      ?
+sum     dw      ?
+initadd db      4 dup(?)
+resdatasize     equ     $-zero
+datares ends
+
+;data for transient portion
+
+trandata        segment byte
+        org     0
+zero    equ     $
+badnam  db      "bad command or file name",13,10,"$"
+misnam  db      "missing file name$"
+renerr  db      "duplicate file name or "
+notfnd  db      "file not found$"
+exebad  db      "error in exe file$"
+nospace db      "insufficient disk space",13,10,"$"
+fuldir  db      "file creation error",13,10,"$"
+overwr  db      "file cannot be copied onto itself",13,10,"$"
+losterr db      "content of destination lost before copy",13,10,"$"
+copied  db      " file(s) copied$"
+dirmes  db      " file(s)$"
+toobig  db      "program too big to fit in memory$"
+baddrv  db      "invalid drive specification$"
+pausmes db      "strike a key when ready . . . $"
+badswt  db      "illegal switch",13,10,"$"
+weektab db      "sunmontuewedthufrisat"
+baddat  db      13,10,"invalid date$"
+curdat  db      "current date is $"
+newdat  db      13,10,"enter new date: $"
+badtim  db      13,10,"invalid time$"
+curtim  db      "current time is $"
+newtim  db      13,10,"enter new time: $"
+suremes db      "are you sure (y/n)? $"
+
+comtab  db      4,"dir",1
+        dw      offset trangroup:catalog
+        db      7,"rename",1
+        dw      offset trangroup:rename
+        db      4,"ren",1
+        dw      offset trangroup:rename
+        db      6,"erase",1
+        dw      offset trangroup:erase
+        db      4,"del",1
+        dw      offset trangroup:erase
+        db      5,"type",1
+        dw      offset trangroup:typefil
+        db      4,"rem",1
+        dw      offset trangroup:command
+        db      5,"copy",1
+        dw      offset trangroup:copy
+        db      6,"pause",1
+        dw      offset trangroup:pause
+        db      5,"date",0
+        dw      offset trangroup:date
+        db      5,"time",0
+        dw      offset trangroup:time
+        db      0               ;terminate command table
+
+combuf  db      128,1,13
+
+trandatasize    equ     $-zero
+trandata        ends
+
+;uninitialized transient data
+transpace       segment byte
+        org     0
+zero    =       $
+        db      128 dup(?)
+tpa     dw      1 dup(?)
+resseg  dw      1 dup(?)
+chkdrv  db      1 dup(?)
+filtyp  db      1 dup(?)
+curdrv  db      1 dup(?)
+parm1   db      1 dup(?)
+parm2   db      1 dup(?)
+comsw   dw      1 dup(?)
+arg1s   dw      1 dup(?)
+arg2s   dw      1 dup(?)
+flager  db      1 dup(?)
+cflag   db      1 dup(?)
+specdrv db      1 dup(?)
+bytcnt  dw      1 dup(?)
+nxtadd  dw      1 dup(?)
+lincnt  db      1 dup(?)
+linlen  db      1 dup(?)
+filecnt dw      1 dup(?)
+exefcb  label word
+idlen   db      1 dup(?)
+id      db      8 dup(?)
+com     db      3 dup(?)
+dest    db      37 dup(?)
+destname db     11 dup(?)
+dirbuf  db      37 dup(?)
+bits    dw      1 dup(?)
+fullscr dw      1 dup(?)
+exeend  dw      1 dup(?)
+;header variables for exe file load
+;these are overlapped with copy variables, below
+runvar  label word
+relpt   dw      1 dup(?)
+relseg  dw      1 dup(?)
+psize   label   word
+pages   dw      1 dup(?)
+relcnt  dw      1 dup(?)
+headsiz dw      1 dup(?)
+        dw      1 dup(?)
+loadlow dw      1 dup(?)
+initss  dw      1 dup(?)
+initsp  dw      1 dup(?)
+        dw      1 dup(?)
+initip  dw      1 dup(?)
+initcs  dw      1 dup(?)
+reltab  dw      1 dup(?)
+runvarsiz       equ     $-runvar
+
+        db      80h dup(?)
+stack   label   word
+
+pretrlen        equ     $-zero          ;used later to compute trnlen
+
+        org     runvar-zero                     ;overlaps exe variables
+
+srcpt   dw      1 dup(?)
+inexact db      1 dup(?)
+append  db      1 dup(?)
+nowrite db      1 dup(?)
+ascii   db      1 dup(?)
+plus    db      1 dup(?)
+source  db      11 dup(?)
+transpacesize   equ     $-zero
+transpace       ends
+
+
+;start of resident portion
+
+coderes segment
+assume  cs:resgroup,ds:resgroup,es:resgroup,ss:resgroup
+        org     0
+zero    =       $
+parmbuf label   word
+
+        org     100h
+
+rstack  label   word
+
+progstart:
+        jmp     conproc
+
+ltpa    dw      0               ;will store tpa segment here
+myseg   dw      0               ;put our own segment here
+
+contc:
+        mov     ax,cs
+        mov     ds,ax
+        mov     ss,ax
+        mov     sp,offset resgroup:rstack
+        sti
+        call    setvect
+        mov     ah,dskreset
+        int     33              ;reset disks in case files were open
+        test    [batch],-1
+        jz      lodcom
+askend:
+        mov     dx,offset resgroup:endbatmes
+        mov     ah,printbuf
+        int     33
+        mov     ax,0c00h+inchar
+        int     33
+        and     al,5fh
+        cmp     al,"n"
+        jz      lodcom
+        cmp     al,"y"
+        jnz     askend
+        mov     [batch],0
+lodcom:
+        mov     ax,cs
+        mov     ss,ax
+        mov     sp,offset resgroup:rstack
+        mov     ds,ax
+        call    setvect
+        call    chksum
+        cmp     dx,[sum]
+        jz      havcom
+        mov     [loading],1
+        call    loadcom
+chksame:
+        call    chksum
+        cmp     dx,[sum]
+        jz      havcom
+        call    wrongcom
+        jmp     short chksame
+havcom:
+        mov     [loading],0
+        mov     si,offset resgroup:ltpa
+        mov     di,offset trangroup:tpa
+        mov     es,[trnseg]
+        cld
+        movsw           ;move tpa segment to transient storage
+        movsw           ;move resident segment too
+        mov     ax,[memsiz]
+        mov     word ptr es:[2],ax
+        jmp     dword ptr [trans]
+
+resident:
+        add     dx,15
+        mov     cl,4
+        shr     dx,cl           ;number of paragraphs of new addition
+        add     cs:[ltpa],dx
+        xor     ax,ax
+        mov     ds,ax
+        jmp     dword ptr ds:[80h]              ;pretend user executed int 20h
+
+dskerr:
+        ;******************************************************
+        ;       this is the default disk error handling code 
+        ;       available to all users if they do not try to 
+        ;       intercept interrupt 24h.
+        ;******************************************************
+        sti
+        push    ds
+        push    cs
+        pop     ds              ;set up local data segment
+        push    dx
+        call    crlf
+        pop     dx
+        add     al,"a"          ;compute drive letter
+        mov     [drvlet],al
+        test    ah,80h          ;check if hard disk error
+        jnz     faterr
+        mov     si,offset resgroup:read
+        test    ah,1
+        jz      savmes
+        mov     si,offset resgroup:write
+savmes:
+        lodsw
+        mov     word ptr [iotyp],ax
+        lodsw
+        mov     word ptr [iotyp+2],ax
+        and     di,0ffh
+        cmp     di,12
+        jbe     havcod
+        mov     di,12
+havcod:
+        mov     di,word ptr [di+mesbas] ;get pointer to error message
+        xchg    di,dx           ;may need dx later
+        mov     ah,printbuf
+        int     33              ;print error type
+        mov     dx,offset resgroup:errmes
+        int     33
+        cmp     [loading],0
+        jnz     getcomdsk
+ask:
+        mov     dx,offset resgroup:request
+        mov     ah,printbuf
+        int     33
+        mov     ax,0c00h+inchar
+        int     33              ;get response
+        call    crlf
+        or      al,20h          ;convert to lower case
+        mov     ah,0            ;return code for ignore
+        cmp     al,"i"          ;ignore?
+        jz      exit
+        inc     ah
+        cmp     al,"r"          ;retry?
+        jz      exit
+        inc     ah
+        cmp     al,"a"          ;abort?
+        jnz     ask
+exit:
+        mov     al,ah
+        mov     dx,di
+        pop     ds
+        iret
+
+faterr:
+        mov     dx,offset resgroup:badfat
+        mov     ah,printbuf
+        int     33
+        mov     dx,offset resgroup:drvnum
+        int     33
+        mov     al,2            ;abort
+        pop     ds
+        iret
+
+getcomdsk:
+        mov     dx,offset resgroup:needcom
+        mov     ah,printbuf
+        int     33
+        mov     ax,0c07h        ;get char without testing or echo
+        int     33
+        jmp     lodcom
+
+crlf:
+        mov     dx,offset resgroup:newlin
+        push    ax
+        mov     ah,printbuf
+        int     33
+        pop     ax
+ret10:  ret
+
+loadcom:
+        push    ds
+        mov     ds,[trnseg]
+        mov     dx,100h
+        mov     ah,setdma
+        int     33
+        pop     ds
+        mov     dx,offset resgroup:comfcb
+        mov     ah,open
+        int     33              ;open command.com
+        or      al,al
+        jz      readcom
+        mov     dx,offset resgroup:needcom
+promptcom:
+        mov     ah,printbuf
+        int     33
+        mov     ax,0c07h        ;get char without testing or echo
+        int     33
+        jmp     short loadcom
+readcom:
+        mov     word ptr[comfcb+rr],offset resgroup:transtart
+        xor     ax,ax
+        mov     word ptr[comfcb+rr+2],ax
+        mov     [comfcb],al             ;use default drive
+        inc     ax
+        mov     word ptr[comfcb+reclen],ax
+        mov     cx,comlen
+        mov     dx,offset resgroup:comfcb
+        mov     ah,rdblk
+        int     33
+        or      al,al
+        jz      ret10
+wrongcom:
+        mov     dx,offset resgroup:combad
+        jmp     short promptcom
+
+chksum:
+        cld
+        push    ds
+        mov     ds,[trnseg]
+        mov     si,100h
+        mov     cx,comlen
+        shr     cx,1
+        xor     dx,dx
+chk:
+        lodsw
+        add     dx,ax
+        loop    chk
+        pop     ds
+        ret
+
+setvect:
+        mov     dx,offset resgroup:lodcom
+        mov     ax,2522h        ;set terminate address

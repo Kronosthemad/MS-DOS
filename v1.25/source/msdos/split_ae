@@ -1,0 +1,493 @@
+rdlast:
+        mov     ax,[bytcnt2]
+        or      ax,ax
+        jz      setfcb
+        mov     [bytcnt1],ax
+        call    nextsec
+        jc      setfcb
+        mov     [bytsecpos],0
+        call    bufrd
+        jmp     short setfcb
+
+wrtdev:
+        push    ds
+        lds     si,dword ptr [dmaadd]
+        or      bl,40h
+        inc     bl
+        jz      wrtcon
+        inc     bl
+        jz      wrtaux
+        inc     bl
+        jz      endwrdev        ;done if device is nul
+wrtlst:
+        lodsb
+        cmp     al,1ah
+        jz      endwrdev
+        call    listout
+        loop    wrtlst
+        jmp     short endwrdev
+
+wrtaux:
+        lodsb
+        call    auxout
+        cmp     al,1ah
+        loopnz  wrtaux
+        jmp     short endwrdev
+
+wrtcon:
+        lodsb
+        cmp     al,1ah
+        jz      endwrdev
+        call    out
+        loop    wrtcon
+endwrdev:
+        pop     ds
+        mov     cx,[reccnt]
+        mov     di,[fcb]
+        jmp     short addrec
+
+havstart:
+        mov     cx,ax
+        call    skpclp
+        jcxz    dowrtj
+        call    allocate
+        jnc     dowrtj
+wrterr:
+        mov     byte ptr [dskerr],1
+lvdsk:
+        mov     ax,word ptr [recpos]
+        mov     dx,word ptr [recpos+2]
+        mov     di,[fcb]
+        ret
+
+dowrtj: jmp     dowrt
+
+wrteofj:
+        jmp     wrteof
+
+store:
+
+; inputs:
+;       ds:di point to fcb
+;       dx:ax = position in file of disk transfer
+;       cx = record count
+; outputs:
+;       dx:ax = position of last record written
+;       cx = no. of records written
+;       es:di point to fcb
+;       lstclus, cluspos fields in fcb set
+
+        call    setup
+        call    date16
+        mov     es:[di.fdate],ax
+        mov     es:[di.ftime],dx
+        or      bl,bl
+        js      wrtdev
+        and     bl,3fh          ;mark file as dirty
+        mov     es:[di.devid],bl
+        call    breakdown
+        mov     ax,word ptr [bytpos]
+        mov     dx,word ptr [bytpos+2]
+        jcxz    wrteofj
+        dec     cx
+        add     ax,cx
+        adc     dx,0            ;ax:dx=last byte accessed
+        div     [bp.secsiz]     ;ax=last sector accessed
+        mov     cl,[bp.clusshft]
+        shr     ax,cl           ;last cluster to be accessed
+        push    ax
+        mov     ax,es:word ptr [di.filsiz]
+        mov     dx,es:word ptr [di.filsiz+2]
+        div     [bp.secsiz]
+        or      dx,dx
+        jz      norndup
+        inc     ax              ;round up if any remainder
+norndup:
+        mov     [valsec],ax     ;number of sectors that have been written
+        pop     ax
+        mov     cx,[clusnum]    ;first cluster accessed
+        call    fndclus
+        mov     [clusnum],bx
+        mov     [lastpos],dx
+        sub     ax,dx           ;last cluster minus current cluster
+        jz      dowrt           ;if we have last clus, we must have first
+        jcxz    havstart        ;see if no more data
+        push    cx              ;no. of clusters short of first
+        mov     cx,ax
+        call    allocate
+        pop     ax
+        jc      wrterr
+        mov     cx,ax
+        mov     dx,[lastpos]
+        inc     dx
+        dec     cx
+        jz      noskip
+        call    skpclp
+noskip:
+        mov     [clusnum],bx
+        mov     [lastpos],dx
+dowrt:
+        cmp     [bytcnt1],0
+        jz      wrtmid
+        mov     bx,[clusnum]
+        call    bufwrt  
+wrtmid:
+        mov     ax,[seccnt]
+        or      ax,ax
+        jz      wrtlast
+        add     [secpos],ax
+        call    nextsec
+        mov     byte ptr [trans],1      ;a transfer is taking place
+        mov     dl,[seccluspos]
+        mov     bx,[clusnum]
+        mov     cx,[seccnt]
+wrtlp:
+        call    optimize
+        jc      notinbuf        ;is one of the sectors buffered?
+        mov     [bufsecno],0    ;if so, invalidate the buffer since we're
+        mov     word ptr [bufdrvno],0ffh        ;       completely rewritting it
+notinbuf:
+        push    di
+        push    ax
+        push    ds
+        mov     ds,[dmaadd+2]
+        call    dwrite
+        pop     ds
+        pop     cx
+        pop     bx
+        jcxz    wrtlast
+        mov     dl,0
+        inc     [lastpos]       ;we'll be using next cluster
+        jmp     short wrtlp
+wrtlast:
+        mov     ax,[bytcnt2]
+        or      ax,ax
+        jz      finwrt
+        mov     [bytcnt1],ax
+        call    nextsec
+        mov     [bytsecpos],0
+        call    bufwrt
+finwrt:
+        mov     ax,[nextadd]
+        sub     ax,[dmaadd]
+        add     ax,word ptr [bytpos]
+        mov     dx,word ptr [bytpos+2]
+        adc     dx,0
+        mov     cx,dx
+        mov     di,[fcb]
+        cmp     ax,es:word ptr [di.filsiz]
+        sbb     cx,es:word ptr [di.filsiz+2]
+        jb      samsiz
+        mov     es:word ptr [di.filsiz],ax
+        mov     es:word ptr [di.filsiz+2],dx
+samsiz:
+        mov     cx,[reccnt]
+        jmp     setclus
+
+
+wrterrj:jmp     wrterr
+
+wrteof:
+        mov     cx,ax
+        or      cx,dx
+        jz      killfil
+        sub     ax,1
+        sbb     dx,0
+        div     [bp.secsiz]
+        mov     cl,[bp.clusshft]
+        shr     ax,cl
+        mov     cx,ax
+        call    fndclus
+        jcxz    relfile
+        call    allocate
+        jc      wrterrj
+update:
+        mov     di,[fcb]
+        mov     ax,word ptr [bytpos]
+        mov     es:word ptr [di.filsiz],ax
+        mov     ax,word ptr [bytpos+2]
+        mov     es:word ptr [di.filsiz+2],ax
+        xor     cx,cx
+        jmp     addrec
+
+relfile:
+        mov     dx,0fffh
+        call    relblks
+setdirt:
+        mov     byte ptr [si-1],1
+        jmp     short update
+
+killfil:
+        xor     bx,bx
+        xchg    bx,es:[di.firclus]
+        or      bx,bx
+        jz      update
+        call    release
+        jmp     short setdirt
+
+
+optimize:
+
+; inputs:
+;       ds = cs
+;       bx = physical cluster
+;       cx = no. of records
+;       dl = sector within cluster
+;       bp = base of drives parameters
+;       [nextadd] = transfer address
+; outputs:
+;       ax = no. of records remaining
+;       bx = transfer address
+;       cx = no. or records to be transferred
+;       dx = physical sector address
+;       di = next cluster
+;       carry clear if a sector to transfer is in the buffer
+;       carry set otherwise
+;       [clusnum] = last cluster accessed
+;       [nextadd] updated
+; bp unchanged. note that segment of transfer not set.
+
+        push    dx
+        push    bx
+        mov     al,[bp.clusmsk]
+        inc     al              ;number of sectors per cluster
+        mov     ah,al
+        sub     al,dl           ;al = number of sectors left in first cluster
+        mov     dx,cx
+        mov     si,[bp.fat]
+        mov     cx,0
+optclus:
+;al has number of sectors available in current cluster
+;ah has number of sectors available in next cluster
+;bx has current physical cluster
+;cx has number of sequential sectors found so far
+;dx has number of sectors left to transfer
+;si has fat pointer
+        call    unpack
+        add     cl,al
+        adc     ch,0
+        cmp     cx,dx
+        jae     blkdon
+        mov     al,ah
+        inc     bx
+        cmp     di,bx
+        jz      optclus
+        dec     bx
+finclus:
+        mov     [clusnum],bx    ;last cluster accessed
+        sub     dx,cx           ;number of sectors still needed
+        push    dx
+        mov     ax,cx
+        mul     [bp.secsiz]     ;number of sectors times sector size
+        mov     si,[nextadd]
+        add     ax,si           ;adjust by size of transfer
+        mov     [nextadd],ax
+        pop     ax              ;number of sectors still needed
+        pop     dx              ;starting cluster
+        sub     bx,dx           ;number of new clusters accessed
+        add     [lastpos],bx
+        pop     bx              ;bl = sector postion within cluster
+        call    figrec
+        mov     bx,si
+;now let's see if any of these sectors are already in the buffer
+        cmp     [bufsecno],dx
+        jc      ret100          ;if dx > [bufsecno] then not in buffer
+        mov     si,dx
+        add     si,cx           ;last sector + 1
+        cmp     [bufsecno],si
+        cmc
+        jc      ret100          ;if si <= [bufsecno] then not in buffer
+        push    ax
+        mov     al,[bp.devnum]
+        cmp     al,[bufdrvno]   ;is buffer for this drive?
+        pop     ax
+        jz      ret100          ;if so, then we match 
+        stc                     ;no match
+ret100: ret
+blkdon:
+        sub     cx,dx           ;number of sectors in cluster we don't want
+        sub     ah,cl           ;number of sectors in cluster we accepted
+        dec     ah              ;adjust to mean position within cluster
+        mov     [seccluspos],ah
+        mov     cx,dx           ;anyway, make the total equal to the request
+        jmp     short finclus
+
+
+figrec:
+
+;inputs:
+;       dx = physical cluster number
+;       bl = sector postion within cluster
+;       bp = base of drive parameters
+;outputs:
+;       dx = physical sector number
+;no other registers affected.
+
+        push    cx
+        mov     cl,[bp.clusshft]
+        dec     dx
+        dec     dx
+        shl     dx,cl
+        or      dl,bl
+        add     dx,[bp.firrec]
+        pop     cx
+        ret
+
+getrec:
+
+; inputs:
+;       ds:dx point to fcb
+; outputs:
+;       cx = 1
+;       dx:ax = record number determined by extent and nr fields
+;       ds:di point to fcb
+; no other registers affected.
+
+        mov     di,dx
+        cmp     byte ptr [di],-1        ;check for extended fcb
+        jnz     normfcb2
+        add     di,7
+normfcb2:
+        mov     cx,1
+        mov     al,[di.nr]
+        mov     dx,[di.extent]
+        shl     al,1
+        shr     dx,1
+        rcr     al,1
+        mov     ah,dl
+        mov     dl,dh
+        mov     dh,0
+        ret
+
+
+allocate:
+
+; inputs:
+;       ds = cs
+;       es = segment of fcb
+;       bx = last cluster of file (0 if null file)
+;       cx = no. of clusters to allocate
+;       dx = position of cluster bx
+;       bp = base of drive parameters
+;       si = fat pointer
+;       [fcb] = displacement of fcb within segment
+; outputs:
+;       if insufficient space
+;         then
+;       carry set
+;       cx = max. no. of records that could be added to file
+;         else
+;       carry clear
+;       bx = first cluster allocated
+;       fat is fully updated including dirty bit
+;       firclus field of fcb set if file was null
+; si,bp unchanged. all other registers destroyed.
+
+        push    [si]
+        push    dx
+        push    cx
+        push    bx
+        mov     ax,bx
+alloc:
+        mov     dx,bx
+findfre:
+        inc     bx
+        cmp     bx,[bp.maxclus]
+        jle     tryout
+        cmp     ax,1
+        jg      tryin
+        pop     bx
+        mov     dx,0fffh
+        call    relblks
+        pop     ax              ;no. of clusters requested
+        sub     ax,cx           ;ax=no. of clusters allocated
+        pop     dx
+        pop     [si]
+        inc     dx              ;position of first cluster allocated
+        add     ax,dx           ;ax=max no. of cluster in file
+        mov     dl,[bp.clusmsk]
+        mov     dh,0
+        inc     dx              ;dx=records/cluster
+        mul     dx              ;ax=max no. of records in file
+        mov     cx,ax
+        sub     cx,word ptr [recpos]    ;cx=max no. of records that could be written
+        ja      maxrec
+        xor     cx,cx           ;if cx was negative, zero it
+maxrec:
+        stc
+ret11:  ret
+
+tryout:
+        call    unpack
+        jz      havfre
+tryin:
+        dec     ax
+        jle     findfre
+        xchg    ax,bx
+        call    unpack
+        jz      havfre
+        xchg    ax,bx
+        jmp     short findfre
+havfre:
+        xchg    bx,dx
+        mov     ax,dx
+        call    pack
+        mov     bx,ax
+        loop    alloc
+        mov     dx,0fffh
+        call    pack
+        mov     byte ptr [si-1],1
+        pop     bx
+        pop     cx              ;don't need this stuff since we're successful
+        pop     dx
+        call    unpack
+        pop     [si]
+        xchg    bx,di
+        or      di,di
+        jnz     ret11
+        mov     di,[fcb]
+        mov     es:[di.firclus],bx
+ret12:  ret
+
+
+release:
+
+; inputs:
+;       ds = cs
+;       bx = cluster in file
+;       si = fat pointer
+;       bp = base of drive parameters
+; function:
+;       frees cluster chain starting with [bx]
+; ax,bx,dx,di all destroyed. other registers unchanged.
+
+        xor     dx,dx
+relblks:
+; enter here with dx=0fffh to put an end-of-file mark
+; in the first cluster and free the rest in the chain.
+        call    unpack
+        jz      ret12
+        mov     ax,di
+        call    pack
+        cmp     ax,0ff8h
+        mov     bx,ax
+        jb      release
+ret13:  ret
+
+
+geteof:
+
+; inputs:
+;       bx = cluster in a file
+;       si = base of drive fat
+;       ds = cs
+; outputs:
+;       bx = last cluster in the file
+; di destroyed. no other registers affected.
+
+        call    unpack
+        cmp     di,0ff8h
+        jae     ret13
+        mov     bx,di
+        jmp     short geteof
+

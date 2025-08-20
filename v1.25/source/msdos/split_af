@@ -1,0 +1,510 @@
+srchfrst: ;system call 17
+        call    getfile
+savplce:
+; search-for-next enters here to save place and report
+; findings.
+        jc      killsrch
+        or      bh,bh
+        js      srchdev
+        mov     ax,[lastent]
+        mov     es:[di.fildirent],ax
+        mov     es:[di.drvbp],bp
+;information in directory entry must be copied into the first
+; 33 bytes starting at the disk transfer address.
+        mov     si,bx
+        les     di,dword ptr [dmaadd]
+        mov     ax,00ffh
+        cmp     al,[extfcb]
+        jnz     normfcb
+        stosw
+        inc     al
+        stosw
+        stosw
+        mov     al,[attrib]
+        stosb
+normfcb:
+        mov     al,[thisdrv]
+        inc     al
+        stosb   ;set drive number
+        mov     cx,16
+        rep     movsw   ;copy remaining 10 characters of name
+        xor     al,al
+        ret
+
+killsrch:
+killsrch1       equ     killsrch+1
+;the purpose of the killsrch1 label is to provide a jump label to the following
+;   instruction which leaves out the segment override.
+        mov     word ptr es:[di.fildirent],-1
+        mov     al,-1
+        ret
+
+srchdev:
+        mov     es:[di.fildirent],bx
+        les     di,dword ptr [dmaadd]
+        xor     ax,ax
+        stosb           ;zero drive byte
+        sub     si,4            ;point to device name
+        movsw
+        movsw
+        mov     ax,2020h
+        stosb
+        stosw
+        stosw
+        stosw                   ;fill with 8 blanks
+        xor     ax,ax
+        mov     cx,10
+        rep     stosw
+        stosb
+ret14:  ret
+
+srchnxt: ;system call 18
+        call    movname
+        mov     di,dx
+        jc      near ptr killsrch1
+        mov     bp,[di.drvbp]
+        mov     ax,[di.fildirent]
+        or      ax,ax
+        js      near ptr killsrch1
+        push    dx
+        push    ds
+        push    cs
+        pop     ds
+        mov     [lastent],ax
+        call    contsrch
+        pop     es
+        pop     di
+        jmp     savplce
+
+
+filesize: ;system call 35
+        call    getfile
+        mov     al,-1
+        jc      ret14
+        add     di,33           ;write size in rr field
+        mov     cx,es:[di.recsiz-33]
+        or      cx,cx
+        jnz     recok
+        mov     cx,128
+recok:
+        xor     ax,ax
+        xor     dx,dx           ;intialize size to zero
+        or      bh,bh           ;check for named i/o device
+        js      devsiz
+        inc     si
+        inc     si              ;point to length field
+        mov     ax,[si+2]       ;get high word of size
+        div     cx
+        push    ax              ;save high part of result
+        lodsw           ;get low word of size
+        div     cx
+        or      dx,dx           ;check for zero remainder
+        pop     dx
+        jz      devsiz
+        inc     ax              ;round up for partial record
+        jnz     devsiz          ;propagate carry?
+        inc     dx
+devsiz:
+        stosw
+        mov     ax,dx
+        stosb
+        mov     al,0
+        cmp     cx,64
+        jae     ret14           ;only 3-byte field if recsiz >= 64
+        mov     es:[di],ah
+        ret
+
+
+setdma: ;system call 26
+        mov     cs:[dmaadd],dx
+        mov     cs:[dmaadd+2],ds
+        ret
+
+nosuchdrv:
+        mov     al,-1
+        ret
+
+getfatpt: ;system call 27
+        mov     dl,0                    ;use default drive
+
+getfatptdl:     ;system call 28
+        push    cs
+        pop     ds
+        mov     al,dl
+        call    getthisdrv
+        jc      nosuchdrv
+        call    fatread
+        mov     bx,[bp.fat]
+        mov     al,[bp.clusmsk]
+        inc     al
+        mov     dx,[bp.maxclus]
+        dec     dx
+        mov     cx,[bp.secsiz]
+        lds     si,dword ptr [spsave]
+        mov     [si.bxsave],bx
+        mov     [si.dxsave],dx
+        mov     [si.cxsave],cx
+        mov     [si.dssave],cs
+        ret
+
+
+getdskpt: ;system call 31
+        push    cs
+        pop     ds
+        mov     al,[curdrv]
+        mov     [thisdrv],al
+        call    fatread
+        lds     si,dword ptr [spsave]
+        mov     [si.bxsave],bp
+        mov     [si.dssave],cs
+        ret
+
+
+dskreset: ;system call 13
+        push    cs
+        pop     ds
+wrtfats:
+; ds=cs. writes back all dirty fats. all registers destroyed.
+        xor     al,al
+        xchg    al,[dirtybuf]
+        or      al,al
+        jz      nobuf
+        mov     bp,[bufdrvbp]
+        mov     dx,[bufsecno]
+        mov     bx,[buffer]
+        mov     cx,1
+        call    dwrite
+nobuf:
+        mov     cl,[numio]
+        mov     ch,0
+        mov     bp,[drvtab]
+wrtfat:
+        push    cx
+        call    chkfatwrt
+        pop     cx
+        add     bp,dpbsiz
+        loop    wrtfat
+        ret
+
+
+getdrv: ;system call 25
+        mov     al,cs:[curdrv]
+ret15:  ret
+
+
+setrndrec: ;system call 36
+        call    getrec
+        mov     [di+33],ax
+        mov     [di+35],dl
+        cmp     [di.recsiz],64
+        jae     ret15
+        mov     [di+36],dh      ;set 4th byte only if record size < 64
+ret16:  ret
+
+
+seldsk: ;system call 14
+        mov     al,cs:[numdrv]
+        cmp     dl,al
+        jnb     ret17
+        mov     cs:[curdrv],dl
+ret17:  ret
+
+bufin:  ;system call 10
+        mov     ax,cs
+        mov     es,ax
+        mov     si,dx
+        mov     ch,0
+        lodsw
+        or      al,al
+        jz      ret17
+        mov     bl,ah
+        mov     bh,ch
+        cmp     al,bl
+        jbe     noedit
+        cmp     byte ptr [bx+si],0dh
+        jz      editon
+noedit:
+        mov     bl,ch
+editon:
+        mov     dl,al
+        dec     dx
+newlin:
+        mov     al,cs:[carpos]
+        mov     cs:[startpos],al
+        push    si
+        mov     di,offset dosgroup:inbuf
+        mov     ah,ch
+        mov     bh,ch
+        mov     dh,ch
+getch:
+        call    in
+        cmp     al,"f"-"@"      ;ignore ^f
+        jz      getch
+        cmp     al,cs:escchar
+        jz      esc
+        cmp     al,7fh
+        jz      backsp
+        cmp     al,8
+        jz      backsp
+        cmp     al,13
+        jz      endlin
+        cmp     al,10
+        jz      phycrlf
+        cmp     al,cancel
+        jz      kilnew
+savch:
+        cmp     dh,dl
+        jae     bufful
+        stosb
+        inc     dh
+        call    bufout
+        or      ah,ah
+        jnz     getch
+        cmp     bh,bl
+        jae     getch
+        inc     si
+        inc     bh
+        jmp     short getch
+
+bufful:
+        mov     al,7
+        call    out
+        jmp     short getch
+
+esc:
+        call    in
+        mov     cl,esctablen
+        push    di
+        mov     di,offset dosgroup:esctab
+        repne   scasb
+        pop     di
+        shl     cx,1
+        mov     bp,cx
+        jmp     [bp+offset dosgroup:escfunc]
+
+endlin:
+        stosb
+        call    out
+        pop     di
+        mov     [di-1],dh
+        inc     dh
+copynew:
+        mov     bp,es
+        mov     bx,ds
+        mov     es,bx
+        mov     ds,bp
+        mov     si,offset dosgroup:inbuf
+        mov     cl,dh
+        rep     movsb
+        ret
+crlf:
+        mov     al,13
+        call    out
+        mov     al,10
+        jmp     out
+
+phycrlf:
+        call    crlf
+        jmp     short getch
+
+kilnew:
+        mov     al,"\"
+        call    out
+        pop     si
+putnew:
+        call    crlf
+        mov     al,cs:[startpos]
+        call    tab
+        jmp     newlin
+
+backsp:
+        or      dh,dh
+        jz      oldbak
+        call    backup
+        mov     al,es:[di]
+        cmp     al," "
+        jae     oldbak
+        cmp     al,9
+        jz      baktab
+        call    backmes
+oldbak:
+        or      ah,ah
+        jnz     getch1
+        or      bh,bh
+        jz      getch1
+        dec     bh
+        dec     si
+getch1:
+        jmp     getch
+baktab:
+        push    di
+        dec     di
+        std
+        mov     cl,dh
+        mov     al," "
+        push    bx
+        mov     bl,7
+        jcxz    figtab
+fndpos:
+        scasb
+        jna     chkcnt
+        cmp     es:byte ptr [di+1],9
+        jz      havtab
+        dec     bl
+chkcnt:
+        loop    fndpos
+figtab:
+        sub     bl,cs:[startpos]
+havtab:
+        sub     bl,dh
+        add     cl,bl
+        and     cl,7
+        cld
+        pop     bx
+        pop     di
+        jz      oldbak
+tabbak:
+        call    backmes
+        loop    tabbak
+        jmp     short oldbak
+backup:
+        dec     dh
+        dec     di
+backmes:
+        mov     al,8
+        call    out
+        mov     al," "
+        call    out
+        mov     al,8
+        jmp     out
+
+twoesc:
+        mov     al,escch
+        jmp     savch
+
+copylin:
+        mov     cl,bl
+        sub     cl,bh
+        jmp     short copyeach
+
+copystr:
+        call    findold
+        jmp     short copyeach
+
+copyone:
+        mov     cl,1
+copyeach:
+        mov     ah,0
+        cmp     dh,dl
+        jz      getch2
+        cmp     bh,bl
+        jz      getch2
+        lodsb
+        stosb
+        call    bufout
+        inc     bh
+        inc     dh
+        loop    copyeach
+getch2:
+        jmp     getch
+
+skipone:
+        cmp     bh,bl
+        jz      getch2
+        inc     bh
+        inc     si
+        jmp     getch
+
+skipstr:
+        call    findold
+        add     si,cx
+        add     bh,cl
+        jmp     getch
+
+findold:
+        call    in
+        mov     cl,bl
+        sub     cl,bh
+        jz      notfnd
+        dec     cx
+        jz      notfnd
+        push    es
+        push    ds
+        pop     es
+        push    di
+        mov     di,si
+        inc     di
+        repne   scasb
+        pop     di
+        pop     es
+        jnz     notfnd
+        not     cl
+        add     cl,bl
+        sub     cl,bh
+ret30:  ret
+notfnd:
+        pop     bp
+        jmp     getch
+
+reedit:
+        mov     al,"@"
+        call    out
+        pop     di
+        push    di
+        push    es
+        push    ds
+        call    copynew
+        pop     ds
+        pop     es
+        pop     si
+        mov     bl,dh
+        jmp     putnew
+
+enterins:
+        if      toglins
+        not     ah
+        jmp     getch
+        endif
+        if      not toglins
+        mov     ah,-1
+        jmp     getch
+
+exitins:
+        mov     ah,0
+        jmp     getch
+        endif
+
+escfunc dw      getch
+        dw      twoesc
+        if      not toglins
+        dw      exitins
+        endif
+        dw      enterins
+        dw      backsp
+        dw      reedit
+        dw      kilnew
+        dw      copylin
+        dw      skipstr
+        dw      copystr
+        dw      skipone
+        dw      copyone
+
+        if      ibm
+        dw      copyone
+        dw      ctrlz
+ctrlz:
+        mov     al,"z"-"@"
+        jmp     savch
+        endif
+bufout:
+        cmp     al," "
+        jae     out
+        cmp     al,9
+        jz      out
+        push    ax
+        mov     al,"^"
+        call    out
+        pop     ax
+        or      al,40h
+        jmp     short out
+

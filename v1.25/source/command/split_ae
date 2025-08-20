@@ -1,0 +1,166 @@
+        call    out2
+        cmp     bl,":"          ;are we outputting time?
+        jnz     skipit
+        mov     al,"."
+        call    out
+skipit: mov     al,dl
+out2:   ;output binary number as two ascii digits
+        aam                     ;convert binary to unpacked bcd
+        xchg    al,ah
+        or      ax,3030h        ;add "0" bias to both digits
+        cmp     al,"0"          ;is msd zero?
+        jnz     nosup
+        sub     al,bh           ;suppress leading zero if enabled
+nosup:
+        mov     bh,0            ;disable zero suppression
+        call    out
+        mov     al,ah
+out:
+;print char in al without affecting registers
+        xchg    ax,dx
+        push    ax
+        mov     ah,outch
+        int     33
+        pop     ax
+        xchg    ax,dx
+        ret
+
+exeload:
+        mov     ax,cs
+        add     ax,loadseg
+        mov     [exeend],ax     ;store in exeend
+        mov     dx,offset trangroup:runvar      ;read header in here
+        mov     ah,setdma
+        int     33
+        mov     cx,runvarsiz    ;amount of header info we need
+        mov     dx,offset trangroup:exefcb
+        mov     ah,rdblk
+        int     33              ;read in header
+        or      al,al
+        jnz     badexe          ;must not reach eof
+        mov     ax,[headsiz]    ;size of header in paragraphs
+;convert header size to 512-byte pages by multiplying by 32 & rounding up
+        add     ax,31           ;round up first
+        mov     cl,5
+        shr     ax,cl           ;multiply by 32
+        mov     [exefcb+rr],ax  ;position in file of program
+        mov     word ptr[exefcb+reclen],512 ;set record size
+        add     bx,10h          ;first paragraph above parameter area
+        mov     dx,[pages]      ;total size of file in 512-byte pages
+        sub     dx,ax           ;size of program in pages
+        mov     [psize],dx
+        shl     dx,cl           ;convert pages back to paragraphs
+        mov     ax,dx
+        add     dx,bx           ;size + start = minimum memory (paragr.)
+        mov     cx,[exeend]     ;get memory size in paragraphs
+        cmp     dx,cx           ;enough memory?
+        ja      shrterr
+        mov     dx,[initsp]
+        add     dx,15
+        shr     dx,1
+        shr     dx,1
+        shr     dx,1
+        shr     dx,1
+        add     dx,[initss]
+        add     dx,bx           ;adjusted value of sp
+        cmp     dx,cx           ;is it valid?
+        ja      shrterr
+        cmp     [loadlow],-1    ;load low or high?
+        jz      load            ;if low, load at segment bx
+        sub     cx,ax           ;memory size - program size = load addr.
+        mov     bx,cx
+load:
+        mov     bp,bx           ;save load segment
+load1:
+loadseg equ     (load1-zero)/16
+        push    ds
+        mov     ds,bx
+        xor     dx,dx           ;address 0 in segment
+        mov     ah,setdma
+        int     33              ;set load address
+        pop     ds
+        mov     cx,[psize]      ;number of records to read
+        mov     dx,offset trangroup:exefcb
+        mov     ah,rdblk
+        int     33              ;read in up to 64k
+        sub     [psize],cx      ;decrement count by amount read
+        jz      havexe          ;did we get it all?
+        test    al,1            ;check return code if not
+        jnz     badexe          ;must be zero if more to come
+        add     bx,1000h-20h    ;bump data segment 64k minus one record
+        jmp     short load1             ;get next 64k block
+
+badexe:
+        mov     dx,offset trangroup:exebad
+        jmp     error
+
+shrterr:
+        mov     dx,offset trangroup:toobig
+        jmp     error
+
+havexe:
+        mov     ax,[reltab]     ;get position of table
+        mov     [exefcb+rr],ax  ;set in random record field
+        mov     word ptr[exefcb+reclen],1  ;set one-byte record
+        mov     dx,offset trangroup:relpt       ;4-byte buffer for relocation address
+        mov     ah,setdma
+        int     33
+        cmp     [relcnt],0
+        jz      norel
+reloc:
+        mov     ah,rdblk
+        mov     dx,offset trangroup:exefcb
+        mov     cx,4
+        int     33              ;read in one relocation pointer
+        or      al,al           ;check return code
+        jnz     badexe
+        mov     di,[relpt]      ;get offset of relocation pointer
+        mov     ax,[relseg]     ;get segment
+        add     ax,bp           ;bias segment with actual load segment
+        mov     es,ax
+        add     word ptr es:[di],bp             ;relocate
+        dec     [relcnt]        ;count off
+        jnz     reloc
+;set up exit conditions
+norel:
+        mov     ax,[initss]
+        add     ax,bp
+        cli
+        mov     ss,ax           ;initialize ss
+        mov     sp,[initsp]
+        sti
+        add     [initcs],bp
+        mov     ax,[tpa]        ;get pointer to parameter area
+        mov     cx,[bytcnt]     ;size of tpa segment
+        mov     es,ax
+        mov     ds,ax           ;set segment registers to point to it
+        call    setup
+        jmp     dword ptr cs:[initip]   ;long jump to program
+
+setup:
+        and     cl,0f0h         ;adjust to even paragraph boundary
+        mov     ax,word ptr ds:[6]              ;get current memory size
+        sub     ax,cx           ;find out how much we're changing it
+        mov     word ptr ds:[6],cx
+        mov     cl,4
+        sar     ax,cl           ;convert to a segment address
+        add     word ptr ds:[8],ax              ;adjust long jump to go to same place
+        mov     dx,80h
+        mov     ah,setdma
+        int     33              ;set default disk transfer address
+        mov     ax,word ptr cs:[parm1]  ;pass on info about fcbs
+        xor     cx,cx
+        mov     dx,cx           ;assume no batch file
+assume  cs:resgroup
+        test    cs:[batch],-1   ;batch file in progress?
+assume  cs:trangroup
+        jz      ret120          ;if not, all set up
+        mov     cx,cs:[resseg]
+        mov     dx,offset resgroup:batfcb       ;cx:dx points to batch fcb
+ret120: ret
+trancodesize    equ     $-zero
+trancode        ends
+comlen  equ     trandatasize+trancodesize-102h          ;end of command load. zero needed to make comlen absolute
+trnlen  equ     (pretrlen+trancodesize+trandatasize+15)/16              ;length of transient in paragraphs
+        end     progstart
+

@@ -1,0 +1,514 @@
+; 86-dos  high-performance operating system for the 8086  version 1.25
+;       by tim paterson
+
+
+; ****************** revision history *************************
+;          >> every change must noted below!! <<
+;
+; 0.34 12/29/80 general release, updating all past customers
+; 0.42 02/25/81 32-byte directory entries added
+; 0.56 03/23/81 variable record and sector sizes
+; 0.60 03/27/81 ctrl-c exit changes, including register save on user stack
+; 0.74 04/15/81 recognize i/o devices with file names
+; 0.75 04/17/81 improve and correct buffer handling
+; 0.76 04/23/81 correct directory size when not 2^n entries
+; 0.80 04/27/81 add console input without echo, functions 7 & 8
+; 1.00 04/28/81 renumber for general release
+; 1.01 05/12/81 fix bug in `store'
+; 1.10 07/21/81 fatal error trapping, nul device, hidden files, date & time,
+;               rename fix, general cleanup
+; 1.11 09/03/81 don't set current block to 0 on open; fix set file size
+; 1.12 10/09/81 zero high half of current block after all (cp/m programs don't)
+; 1.13 10/29/81 fix classic "no write-through" error in buffer handling
+; 1.20 12/31/81 add time to fcb; separate fat from dpt; kill smalldir;
+;               add flush and mapdev calls; allow disk mapping in dskchg;
+;               lots of smaller improvements
+; 1.21 01/06/82 highmem switch to run dos in high memory
+; 1.22 01/12/82 add verify system call to enable/disable verify after write
+; 1.23 02/11/82 add defaulting to parser; use variable escape character
+;               don't zero extent field in ibm version (back to 1.01!)
+; 1.24 03/01/82 restore fcn. 27 to 1.0 level; add fcn. 28
+; 1.25 03/03/82 put marker (00) at end of directory to speed searches
+;
+; *************************************************************
+
+
+; interrupt entry points:
+
+; intbase:      abort
+; intbase+4:    command
+; intbase+8:    base exit address
+; intbase+c:    control-c abort
+; intbase+10h:  fatal error abort
+; intbase+14h:  bios disk read
+; intbase+18h:  bios disk write
+; intbase+40h:  long jump to call entry point
+
+        if      ibm
+escch   equ     0
+cancel  equ     1bh             ;cancel with esc
+toglins equ     true            ;one key toggles insert mode
+toglprn equ     true            ;one key toggles printer echo
+numdev  equ     6               ;include "com1" as i/o device name
+zeroext equ     true
+        else
+escch   equ     1bh
+cancel  equ     "x"-"@"         ;cancel with ctrl-x
+toglins equ     false           ;separate keys for insert mode on and off
+toglprn equ     false           ;separate keys for printer echo on and off
+numdev  equ     5               ;number of i/o device names
+zeroext equ     false
+        endif
+
+maxcall equ     36
+maxcom  equ     46
+intbase equ     80h
+inttab  equ     20h
+entrypointseg   equ     0ch
+entrypoint      equ     intbase+40h
+contc   equ     inttab+3
+exit    equ     intbase+8
+longjump equ    0eah
+longcall equ    9ah
+maxdif  equ     0fffh
+savexit equ     10
+
+; field definition for fcbs
+
+fcblock struc
+        db      12 dup (?)              ;drive code and name
+extent  dw      ?
+recsiz  dw      ?       ;size of record (user settable)
+filsiz  dw      ?       ;size of file in bytes
+drvbp   dw      ?       ;bp for search first and search next
+fdate   dw      ?       ;date of last writing
+ftime   dw      ?       ;time of last writing
+devid   db      ?       ;device id number, bits 0-5
+                        ;bit 7=0 for file, bit 7=1 for i/o device
+                        ;if file, bit 6=0 if dirty
+                        ;if i/o device, bit 6=0 if eof (input)
+firclus dw      ?       ;first cluster of file
+lstclus dw      ?       ;last cluster accessed
+cluspos dw      ?       ;position of last cluster accessed
+        db      ?       ;forces nr to offset 32
+nr      db      ?       ;next record
+rr      db      3 dup (?)               ;random record
+fcblock ends
+fildirent       = filsiz                ;used only by search first and search next
+
+; description of 32-byte directory entry (same as returned by search first
+; and search next, functions 17 and 18).
+;
+; location      bytes   description
+;
+;    0          11      file name and extension ( 0e5h if empty)
+;   11           1      attributes. bits 1 or 2 make file hidden
+;   12          10      zero field (for expansion)
+;   22           2      time. bits 0-4=seconds/2, bits 5-10=minute, 11-15=hour
+;   24           2      date. bits 0-4=day, bits 5-8=month, bits 9-15=year-1980
+;   26           2      first allocation unit ( < 4080 )
+;   28           4      file size, in bytes (lsb first, 30 bits max.)
+;
+; the file allocation table uses a 12-bit entry for each allocation unit on
+; the disk. these entries are packed, two for every three bytes. the contents
+; of entry number n is found by 1) multiplying n by 1.5; 2) adding the result
+; to the base address of the allocation table; 3) fetching the 16-bit word at
+; this address; 4) if n was odd (so that n*1.5 was not an integer), shift the
+; word right four bits; 5) mask to 12 bits (and with 0fff hex). entry number
+; zero is used as an end-of-file trap in the os and as a flag for directory
+; entry size (if smalldir selected). entry 1 is reserved for future use. the
+; first available allocation unit is assigned entry number two, and even
+; though it is the first, is called cluster 2. entries greater than 0ff8h are
+; end of file marks; entries of zero are unallocated. otherwise, the contents
+; of a fat entry is the number of the next cluster in the file.
+
+
+; field definition for drive parameter block
+
+dpblock struc
+devnum  db      ?       ;i/o driver number
+drvnum  db      ?       ;physical unit number
+secsiz  dw      ?       ;size of physical sector in bytes
+clusmsk db      ?       ;sectors/cluster - 1
+clusshft db     ?       ;log2 of sectors/cluster
+firfat  dw      ?       ;starting record of fats
+fatcnt  db      ?       ;number of fats for this drive
+maxent  dw      ?       ;number of directory entries
+firrec  dw      ?       ;first sector of first cluster
+maxclus dw      ?       ;number of clusters on drive + 1
+fatsiz  db      ?       ;number of records occupied by fat
+firdir  dw      ?       ;starting record of directory
+fat     dw      ?       ;pointer to start of fat
+dpblock ends
+
+dpbsiz  equ     20      ;size of the structure in bytes
+dirsec  =       firrec  ;number of dir. sectors (init temporary)
+dsksiz  =       maxclus ;size of disk (temp used during init only)
+
+;the following are all of the segments used
+;they are declared in the order that they should be placed in the executable
+
+code    segment
+code    ends
+
+constants       segment byte
+constants       ends
+
+data    segment word
+data    ends
+
+dosgroup        group   code,constants,data
+
+segbios segment
+segbios ends
+
+
+; bois entry point definitions
+
+        if      ibm
+biosseg equ     60h
+        endif
+        if      not ibm
+biosseg equ     40h
+        endif
+
+segbios         segment at biosseg
+                org     0
+                db      3 dup (?)       ;reserve room for jump to init code
+biosstat        db      3 dup (?)       ;console input status check
+biosin          db      3 dup (?)       ;get console character
+biosout         db      3 dup (?)       ;output console character
+biosprint       db      3 dup (?)       ;output to printer
+biosauxin       db      3 dup (?)       ;get byte from auxilliary
+biosauxout      db      3 dup (?)       ;output byte to auxilliary
+biosread        db      3 dup (?)       ;disk read
+bioswrite       db      3 dup (?)       ;disk write
+biosdskchg      db      3 dup (?)       ;dsik-change status
+biossetdate     db      3 dup (?)       ;set date
+biossettime     db      3 dup (?)       ;set time
+biosgettime     db      3 dup (?)       ;get time and date
+biosflush       db      3 dup (?)       ;clear console input buffer
+biosmapdev      db      3 dup (?)       ;dynamic disk table mapper
+
+segbios ends
+; location of user registers relative user stack pointer
+
+stkptrs struc
+axsave  dw      ?
+bxsave  dw      ?
+cxsave  dw      ?
+dxsave  dw      ?
+sisave  dw      ?
+disave  dw      ?
+bpsave  dw      ?
+dssave  dw      ?
+essave  dw      ?
+ipsave  dw      ?
+cssave  dw      ?
+fsave   dw      ?
+stkptrs ends
+
+; start of code
+
+code    segment
+assume  cs:dosgroup,ds:dosgroup,es:dosgroup,ss:dosgroup
+
+        org     0
+codstrt equ     $
+        jmp     dosinit
+
+escchar db      escch   ;lead-in character for escape sequences
+esctab: 
+        if      not ibm
+        db      "s"     ;copy one char
+        db      "v"     ;skip one char
+        db      "t"     ;copy to char
+        db      "w"     ;skip to char
+        db      "u"     ;copy line
+        db      "e"     ;kill line (no change in template)
+        db      "j"     ;reedit line (new template)
+        db      "d"     ;backspace
+        db      "p"     ;enter insert mode
+        db      "q"     ;exit insert mode
+        db      "r"     ;escape character
+        db      "r"     ;end of table
+        endif
+        if      ibm
+        db      64      ;crtl-z - f6
+        db      77      ;copy one char - -->
+        db      59      ;copy one char - f1
+        db      83      ;skip one char - del
+        db      60      ;copy to char - f2
+        db      62      ;skip to char - f4
+        db      61      ;copy line - f3
+        db      61      ;kill line (no change to template ) - not used
+        db      63      ;reedit line (new template) - f5
+        db      75      ;backspace - <--
+        db      82      ;enter insert mode - ins (toggle)
+        db      65      ;escape character - f7
+        db      65      ;end of table
+        endif
+
+esctablen equ   $-esctab
+        if      not ibm
+header  db      13,10,"ms-dos version 1.25"
+        if      highmem
+        db      "h"
+        endif
+        if      dsktest
+        db      "d"
+        endif
+
+        db      13,10
+        db      "copyright 1981,82 microsoft, inc.",13,10,"$"
+        endif
+
+quit:
+        mov     ah,0
+        jmp     short savregs
+
+command: ;interrupt call entry point
+        cmp     ah,maxcom
+        jbe     savregs
+badcall:
+        mov     al,0
+iret:   iret
+
+entry:  ;system call entry point and dispatcher
+        pop     ax              ;ip from the long call at 5
+        pop     ax              ;segment from the long call at 5
+        pop     cs:[temp]       ;ip from the call 5
+        pushf                   ;start re-ordering the stack
+        cli
+        push    ax              ;save segment
+        push    cs:[temp]       ;stack now ordered as if int had been used
+        cmp     cl,maxcall      ;this entry point doesn't get as many calls
+        ja      badcall
+        mov     ah,cl
+savregs:
+        push    es
+        push    ds
+        push    bp
+        push    di
+        push    si
+        push    dx
+        push    cx
+        push    bx
+        push    ax
+
+        if      dsktest
+        mov     ax,cs:[spsave]
+        mov     cs:[nsp],ax
+        mov     ax,cs:[sssave]
+        mov     cs:[nss],ax
+        pop     ax
+        push    ax
+        endif
+
+        mov     cs:[spsave],sp
+        mov     cs:[sssave],ss
+        mov     sp,cs
+        mov     ss,sp
+redisp:
+        mov     sp,offset dosgroup:iostack
+        sti                     ;stack ok now
+        mov     bl,ah
+        mov     bh,0
+        shl     bx,1
+        cld
+        cmp     ah,12
+        jle     samstk
+        mov     sp,offset dosgroup:dskstack
+samstk:
+        call    cs:[bx+dispatch]
+leave:
+        cli
+        mov     sp,cs:[spsave]
+        mov     ss,cs:[sssave]
+        mov     bp,sp
+        mov     byte ptr [bp.axsave],al
+
+        if      dsktest
+        mov     ax,cs:[nsp]
+        mov     cs:[spsave],ax
+        mov     ax,cs:[nss]
+        mov     cs:[sssave],ax
+        endif
+
+        pop     ax
+        pop     bx
+        pop     cx
+        pop     dx
+        pop     si
+        pop     di
+        pop     bp
+        pop     ds
+        pop     es
+        iret
+; standard functions
+dispatch dw     abort           ;0
+        dw      conin
+        dw      conout
+        dw      reader
+        dw      punch
+        dw      list            ;5
+        dw      rawio
+        dw      rawinp
+        dw      in
+        dw      prtbuf
+        dw      bufin           ;10
+        dw      constat
+        dw      flushkb
+        dw      dskreset
+        dw      seldsk
+        dw      open            ;15
+        dw      close
+        dw      srchfrst
+        dw      srchnxt
+        dw      delete
+        dw      seqrd           ;20
+        dw      seqwrt
+        dw      create
+        dw      rename
+        dw      inuse
+        dw      getdrv          ;25
+        dw      setdma
+        dw      getfatpt
+        dw      getfatptdl
+        dw      getrdonly
+        dw      setattrib       ;30
+        dw      getdskpt
+        dw      usercode
+        dw      rndrd
+        dw      rndwrt
+        dw      filesize        ;35
+        dw      setrndrec
+; extended functions
+        dw      setvect
+        dw      newbase
+        dw      blkrd
+        dw      blkwrt          ;40
+        dw      makefcb
+        dw      getdate
+        dw      setdate
+        dw      gettime
+        dw      settime         ;45
+        dw      verify
+
+inuse:
+getio:
+setio:
+getrdonly:
+setattrib:
+usercode:
+        mov     al,0
+        ret
+
+verify:
+        and     al,1
+        mov     cs:verflg,al
+        ret
+
+flushkb:
+        push    ax
+        call    far ptr biosflush
+        pop     ax
+        mov     ah,al
+        cmp     al,1
+        jz      redispj
+        cmp     al,6
+        jz      redispj
+        cmp     al,7
+        jz      redispj
+        cmp     al,8
+        jz      redispj
+        cmp     al,10
+        jz      redispj
+        mov     al,0
+        ret
+
+redispj:jmp     redisp
+
+reader:
+auxin:
+        call    statchk
+        call    far ptr biosauxin 
+        ret
+
+punch:
+        mov     al,dl
+auxout:
+        push    ax
+        call    statchk
+        pop     ax
+        call    far ptr biosauxout 
+        ret
+
+
+unpack:
+
+; inputs:
+;       ds = cs
+;       bx = cluster number
+;       bp = base of drive parameters
+;       si = pointer to drive fat
+; outputs:
+;       di = contents of fat for given cluster
+;       zero set means di=0 (free cluster)
+; no other registers affected. fatal error if cluster too big.
+
+        cmp     bx,[bp.maxclus]
+        ja      hurtfat
+        lea     di,[si+bx]
+        shr     bx,1
+        mov     di,[di+bx]
+        jnc     havclus
+        shr     di,1
+        shr     di,1
+        shr     di,1
+        shr     di,1
+        stc
+havclus:
+        rcl     bx,1
+        and     di,0fffh
+        ret
+hurtfat:
+        push    ax
+        mov     ah,80h          ;signal bad fat to int 24h handler
+        mov     di,0fffh        ;in case int 24h returns (it shouldn't)
+        call    fatal
+        pop     ax              ;try to ignore bad fat
+        ret
+
+
+pack:
+
+; inputs:
+;       ds = cs
+;       bx = cluster number
+;       dx = data
+;       si = pointer to drive fat
+; outputs:
+;       the data is stored in the fat at the given cluster.
+;       bx,dx,di all destroyed
+;       no other registers affected
+
+        mov     di,bx
+        shr     bx,1
+        add     bx,si
+        add     bx,di
+        shr     di,1
+        mov     di,[bx]
+        jnc     aligned
+        shl     dx,1
+        shl     dx,1
+        shl     dx,1
+        shl     dx,1
+        and     di,0fh
+        jmp     short packin
+aligned:
+        and     di,0f000h
+packin:
+        or      di,dx
+        mov     [bx],di
+        ret

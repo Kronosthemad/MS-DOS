@@ -1,0 +1,500 @@
+        int     21h
+        mov     dx,offset resgroup:contc
+        mov     ax,2523h        ;set ctrl-c address
+        int     21h
+        mov     dx,offset resgroup:dskerr
+        mov     ax,2524h        ;set hard disk error address
+        int     33
+        mov     dx,offset resgroup:resident
+        mov     ax,2527h        ;set terminate and stay resident address
+        int     33
+        ret
+rescodesize     equ     $-zero
+coderes ends
+
+;*******************************************************************
+;start of init portion
+;this code is overlayed the first time the tpa is used.
+
+init    segment byte
+
+        org     0
+zero    =       $
+conproc:
+        mov     sp,offset resgroup:rstack
+
+        if      highmem
+        mov     ax,word ptr ds:[2]
+        sub     ax,((rescodesize+resdatasize)+15)/16            ;subtract size of resident
+        mov     word ptr ds:[2],ax
+        mov     es,ax
+        mov     si,100h
+        mov     di,si
+        mov     cx,((rescodesize+resdatasize)-100h+1)/2 ;length of resident in words
+        rep     movsw                   ;move to end of memory
+        mov     ds,ax
+        mov     [ltpa],cs
+        endif
+
+        if      not highmem
+        mov     ax,cs
+        add     ax,((rescodesize+resdatasize)+15)/16            ;compute segment of tpa
+        mov     [ltpa],ax
+        mov     ax,word ptr ds:[2]
+        endif
+
+        mov     [myseg],ds
+        mov     [memsiz],ax
+        sub     ax,trnlen               ;subtract size of transient
+        mov     [trnseg],ax
+        call    setvect
+        call    loadcom
+        call    chksum
+        mov     [sum],dx
+
+        if msver
+        if      highmem
+        push    ds
+        push    cs
+        pop     ds
+        endif
+        mov     dx,offset resgroup:header
+        mov     ah,printbuf
+        int     33
+        if      highmem
+        pop     ds
+        endif
+        endif
+
+        mov     dx,offset resgroup:batfcb
+        mov     ah,open
+        int     33                      ;see if autoexec.bat exists
+        mov     word ptr[batfcb+reclen],1       ;set record length to 1
+        or      al,al                   ;zero means file found
+        jz      drv0
+        mov     [batch],0               ;not found--turn off batch job
+        mov     ax,offset trangroup:datinit
+        mov     word ptr[initadd],ax
+        mov     ax,[trnseg]
+        mov     word ptr[initadd+2],ax
+        call    dword ptr ds:[initadd]
+
+        if ibmver
+        mov     dx,offset resgroup:header
+        mov     ah,printbuf
+        int     33
+        endif
+
+drv0:
+        jmp     havcom
+
+
+        if msver
+header  db      13,10,"command v. 1.17"
+        if      highmem
+        db      "h"
+        endif
+        db      13,10,"$"
+        endif
+
+        if ibmver
+header  db      13,10,13,10,"the ibm personal computer dos",13,10
+        db      "version 1.10 (c)copyright ibm corp 1981, 1982",13,10,"$"
+        db      "licensed material - program property of ibm"
+        endif
+
+initsize        equ     $-zero
+init    ends
+
+;this tail segment is used to produce a para aligned label in the resident
+; group which is the location where the transient segments will be loaded
+; initialy.
+
+tail    segment para
+        org     0
+transtart       label   word
+tail    ends
+
+;********************************************************************
+;start of transient portion
+;this code is loaded at the end of memory and may be overwritten by
+;memory-intensive user programs.
+
+trancode        segment para
+assume  cs:trangroup,ds:trangroup,es:trangroup,ss:trangroup
+
+wswitch equ     1               ;wide display during dir
+pswitch equ     2               ;pause (or page) mode during dir
+vswitch equ     4               ;verify during copy
+aswitch equ     8               ;ascii mode during copy
+bswitch equ     10h             ;binary mode during copy
+
+        org     0
+zero    =       $
+
+        org     100h            ;allow for 100h parameter area
+
+setdrv:
+        mov     ah,seldrv
+        int     21h
+command:
+        cld
+        mov     ax,cs
+        mov     ss,ax
+        mov     sp,offset trangroup:stack
+        mov     es,ax
+        mov     ds,ax
+        sti
+        mov     ax,46*100h
+        mov     dl,0
+        int     33              ;turn off verify after write
+        mov     ax,cs           ;get segment we're in
+        sub     ax,[tpa]        ;ax=size ot tpa in paragraphs
+        mov     dx,16
+        mul     dx              ;dx:ax=size of tpa in bytes
+        or      dx,dx           ;see if over 64k
+        jz      savsiz          ;ok if not
+        mov     ax,-1           ;if so, limit to 65535 bytes
+savsiz:
+        mov     [bytcnt],ax     ;max no. of bytes that can be buffered
+        call    crlf2
+getcom:
+        mov     ah,getdrv
+        int     21h
+        mov     [curdrv],al
+        add     al,"a"
+        call    out             ;print letter for default drive
+        mov     al,sym
+        call    out
+        mov     ds,[resseg]     ;all batch work must use resident seg.
+assume  ds:resgroup
+        test    [batch],-1
+        jnz     readbat
+        push    cs
+        pop     ds              ;need local segment to point to buffer
+assume  ds:trangroup
+        mov     dx,offset trangroup:combuf
+        mov     ah,inbuf
+        int     21h             ;get a command
+        jmp     docom
+
+;all batch proccessing has ds set to segment of resident portion
+assume  ds:resgroup
+needparm:
+        call    getbatbyt
+        cmp     al,"%"          ;check for two consecutive %
+        jz      savbatbyt
+        cmp     al,13           ;check for end-of-line
+        jz      savbatbyt
+        sub     al,"0"
+        jb      rdbat           ;ignore parameter reference if invalid
+        cmp     al,9
+        ja      rdbat
+        cbw
+        mov     si,ax
+        shl     si,1            ;two bytes per entry
+        mov     si,[si+offset resgroup:parmtab] ;get pointer to corresponding parameter
+        cmp     si,-1           ;check if parameter exists
+        jz      rdbat           ;ignore if it doesn't
+        mov     ah,outch
+rdparm:
+        lodsb           ;from resident segment
+        cmp     al,0dh          ;check for end of parameter
+        jz      rdbat
+        stosb           ;to transient segment
+        mov     dl,al
+        int     33              ;display paramters too
+        jmp     short rdparm
+
+promptbat:
+        mov     ah,printbuf
+        mov     dx,offset resgroup:needbat
+        int     33              ;prompt for batch file
+        mov     ah,printbuf
+        mov     dx,offset resgroup:prompt
+        int     33
+        mov     ax,0c00h+inchar
+        int     33
+        jmp     command
+
+badcomj1:jmp    badcom
+
+readbat:
+        mov     dx,offset resgroup:batfcb
+        mov     ah,open
+        int     33              ;make sure batch file still exists
+        or      al,al
+        jnz     promptbat       ;if open fails, prompt for disk
+        mov     word ptr [batfcb+reclen],1
+        mov     dx,offset resgroup:batbyt
+        mov     ah,setdma
+        int     33
+        mov     di,offset trangroup:combuf+2
+rdbat:
+        call    getbatbyt
+        cmp     al,"%"          ;check for parameter
+        jz      needparm
+savbatbyt:
+        stosb
+        call    out             ;display batched command line
+        cmp     al,0dh
+        jnz     rdbat
+        sub     di,offset trangroup:combuf+3
+        mov     ax,di
+        mov     es:[combuf+1],al        ;set length of line
+        call    getbatbyt       ;eat linefeed
+        push    cs
+        pop     ds              ;go back to local segment
+assume ds:trangroup
+docom:
+;all segments are local for command line processing
+        mov     al,10
+        call    out
+        mov     si,offset trangroup:combuf+2
+        mov     di,offset trangroup:idlen
+        mov     ax,2901h        ;make fcb with blank scan-off
+        int     21h
+        cmp     al,1            ;check for ambiguous command name
+        jz      badcomj1        ;ambiguous commands not allowed
+        cmp     al,-1
+        jnz     drvgd
+        jmp     drvbad
+drvgd:
+        mov     al,[di]
+        mov     [specdrv],al
+        mov     al," "
+        mov     cx,9
+        inc     di
+        repne   scasb           ;count no. of letters in command name
+        mov     al,9
+        sub     al,cl
+        mov     [idlen],al
+        mov     di,81h
+        mov     cx,0
+        push    si
+comtail:
+        lodsb
+        stosb           ;move command tail to 80h
+        cmp     al,13
+        loopnz  comtail
+        not     cl
+        mov     byte ptr ds:[80h],cl
+        pop     si
+;if the command has 0 parameters must check here for
+;any switches that might be present.
+;si -> first character after the command.
+        mov     [flager],0      ;set error flag before any calls to switch 
+        call    switch          ;is the next character a "/"
+        mov     [comsw],ax
+        mov     di,fcb
+        mov     ax,2901h
+        int     21h
+        mov     [parm1],al      ;save result of parse
+        call    switch
+        mov     [arg1s],ax
+        mov     di,fcb+10h
+        mov     ax,2901h
+        int     21h             ;parse file name
+        mov     [parm2],al      ;save result
+        call    switch
+        mov     [arg2s],ax
+        mov     al,[idlen]
+        mov     dl,[specdrv]
+        or      dl,dl           ;check if drive was specified
+        jz      ok
+        jmp     drvchk
+ok:     dec     al              ;check for null command
+        jnz     fndcom
+        jmp     getcom
+
+retsw:
+        xchg    ax,bx           ;put switches in ax
+        ret
+
+switch:
+        xor     bx,bx           ;initialize - no switches set
+swloop:
+        call    scanoff         ;skip any delimiters
+        cmp     al,"/"          ;is it a switch specifier?
+        jnz     retsw           ;no -- we're finished
+        inc     si              ;skip over "/"
+        call    scanoff
+        inc     si
+;convert lower case input to upper case
+        cmp     al,"a"
+        jb      savchr
+        cmp     al,"z"
+        ja      savchr
+        sub     al,20h          ;lower-case changed to upper-case
+savchr:
+        mov     di,offset trangroup:swlist
+        mov     cx,swcount
+        repne   scasb                   ;look for matching switch
+        jnz     badsw
+        mov     ax,1
+        shl     ax,cl           ;set a bit for the switch
+        or      bx,ax
+        jmp     short swloop
+
+badsw:
+        mov     [flager],1      ;record error in switch
+        jmp     short swloop
+
+swlist  db      "bavpw"
+swcount equ     $-swlist
+
+drvbad:
+        mov     dx,offset trangroup:baddrv
+        jmp     error
+
+fndcom:
+        mov     si,offset trangroup:comtab      ;prepare to search command table
+        mov     ch,0
+findcom:
+        mov     di,offset trangroup:idlen
+        mov     cl,[si]
+        jcxz    external
+        repe    cmpsb
+        lahf
+        add     si,cx           ;bump to next position without affecting flags
+        sahf
+        lodsb           ;get flag for drive check
+        mov     [chkdrv],al
+        lodsw           ;get address of command
+        jnz     findcom
+        mov     dx,ax
+        cmp     [chkdrv],0
+        jz      nocheck
+        mov     al,[parm1]
+        or      al,[parm2]      ;check if either parm. had invalid drive
+        cmp     al,-1
+        jz      drvbad
+nocheck:call    dx
+comjmp: jmp     command
+
+badcomj:jmp     badcom
+
+setdrv1:
+        jmp     setdrv
+
+drvchk:
+        dec     dl              ;adjust for correct drive number
+        dec     al              ;check if anything else is on line
+        jz      setdrv1
+external:
+        mov     al,[specdrv]
+        mov     [idlen],al
+        mov     word ptr[com],4f00h+"c" ;"co"
+        mov     byte ptr[com+2],"m"
+        mov     dx,offset trangroup:idlen
+        mov     ah,open
+        int     33              ;check if command to be executed
+        mov     [filtyp],al     ;0 for com files, -1 for exe files
+        or      al,al
+        jz      execute
+        mov     word ptr[com],5800h+"e" ;"ex"
+        mov     byte ptr[com+2],"e"
+        int     33              ;check for exe file
+        or      al,al
+        jz      execute
+        mov     word ptr[com],4100h+"b" ;"ba"
+        mov     byte ptr[com+2],"t"
+        int     33              ;check if batch file to be executed
+        or      al,al
+        jnz     badcomj
+batcom:
+;batch parameters are read with es set to segment of resident part
+        mov     es,[resseg]
+assume  es:resgroup
+        mov     di,offset resgroup:parmtab
+        mov     ax,-1
+        mov     cx,10
+        rep     stosw           ;zero parameter pointer table
+        mov     si,offset trangroup:combuf+2
+        mov     di,offset resgroup:parmbuf
+        mov     bx,offset resgroup:parmtab
+eachparm:
+        call    scanoff
+        cmp     al,0dh
+        jz      havparm
+        mov     es:[bx],di              ;set pointer table to point to actual parameter
+        inc     bx
+        inc     bx
+movparm:
+        lodsb
+        call    delim
+        jz      endparm         ;check for end of parameter
+        stosb
+        cmp     al,0dh
+        jz      havparm
+        jmp     short movparm
+endparm:
+        mov     al,0dh
+        stosb           ;end-of-parameter marker
+        cmp     bx,offset resgroup:parmtab+20   ;maximum number of parameters?
+        jb      eachparm
+havparm:
+        mov     si,offset trangroup:idlen
+        mov     di,offset resgroup:batfcb
+        mov     cx,16
+        rep     movsw           ;move into private batch fcb
+        xor     ax,ax
+        push    es
+        pop     ds                      ;simply batch fcb setup
+assume  ds:resgroup
+        mov     word ptr[batfcb+rr],ax
+        mov     word ptr[batfcb+rr+2],ax        ;zero rr field
+        inc     ax
+        mov     word ptr[batfcb+reclen],ax      ;set record length to 1 byte
+        mov     [batch],al              ;flag batch job in progress
+        jmp     command
+assume  ds:trangroup,es:trangroup
+
+execute:
+        mov     ax,word ptr[idlen+16]
+        or      ax,word ptr[idlen+18]           ;see if zero length
+        jz      badcom                  ;if so, error
+        xor     ax,ax
+        mov     word ptr[idlen+rr],ax
+        mov     word ptr[idlen+rr+2],ax         ;set rr field to zero
+        inc     ax
+        mov     word ptr[idlen+reclen],ax       ;set record length field to 1
+        mov     dx,[tpa]
+        mov     bx,dx
+        mov     ah,setbase
+        int     21h
+        test    [filtyp],-1             ;check if file is com or exe
+        jz      comload
+        jmp     exeload
+comload:push    ds
+        mov     ds,dx
+        mov     dx,100h
+        mov     ah,setdma
+        int     21h
+        pop     ds
+        mov     cx,[bytcnt]
+        sub     cx,100h
+        mov     dx,offset trangroup:idlen
+        mov     ah,rdblk
+        int     21h
+        dec     al
+        mov     dx,offset trangroup:toobig
+        jnz     error
+;set up exit conditions
+        mov     cx,[bytcnt]
+        mov     ds,bx
+        mov     es,bx
+        cli
+        mov     ss,bx
+        mov     sp,cx
+        sti
+        sub     cx,100h         ;allow some stack space
+        xor     ax,ax
+        push    ax
+        mov     ax,100h
+        push    bx
+        push    ax
+        call    setup
+xxx     proc    far
+        ret
+xxx     endp
